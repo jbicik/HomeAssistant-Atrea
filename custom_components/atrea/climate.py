@@ -17,17 +17,15 @@ except ImportError:
         PLATFORM_SCHEMA,
     )
 from homeassistant.components.climate.const import (
-    HVAC_MODE_OFF,
-    HVAC_MODE_AUTO,
-    HVAC_MODE_FAN_ONLY,
     SWING_VERTICAL, 
     SWING_HORIZONTAL, 
     SWING_BOTH,
+    HVACMode
 )
 from homeassistant.const import (
     CONF_NAME,
     CONF_IP_ADDRESS,
-    TEMP_CELSIUS,
+    UnitOfTemperature,
     ATTR_TEMPERATURE,
 )
 from homeassistant.util import Throttle
@@ -111,7 +109,6 @@ class AtreaDevice(ClimateEntity):
         self._oda_req = 0
         self._oda_act_flow = 0
         self._sc_voltage = 0.0
-        self._all_values = ""
 
         self._current_preset = None
         self._current_hvac_mode = None
@@ -238,13 +235,20 @@ class AtreaDevice(ClimateEntity):
         attributes['oda_required'] = self._oda_req
         attributes['oda_actual_flow'] = self._oda_act_flow
         attributes['sc_voltage'] = self._sc_voltage
-        attributes['all_values'] = self._all_values
 
+        if self._heating == 1:
+            attributes["hvac_action"] = HVACAction.HEATING
+        elif self._cooling == 1:
+            attributes["hvac_action"] = HVACAction.COOLING
+        elif self._current_hvac_mode == HVACMode.OFF:
+            attributes["hvac_action"] = HVACAction.OFF
+        elif "hvac_action" in attributes:
+            del attributes["hvac_action"]
         return attributes
 
     @property
     def temperature_unit(self):
-        return TEMP_CELSIUS
+        return UnitOfTemperature.CELSIUS
 
     @property
     def target_temperature(self):
@@ -301,7 +305,7 @@ class AtreaDevice(ClimateEntity):
             return HVACAction.HEATING
         elif (self._cooling == 1):
             return HVACAction.COOLING
-        elif (self._current_hvac_mode == HVAC_MODE_OFF):
+        elif (self._current_hvac_mode == HVACMode.OFF):
             return HVACAction.OFF
         else:
             return HVACAction.FAN
@@ -338,8 +342,6 @@ class AtreaDevice(ClimateEntity):
         self._alerts = []
         if status != False:
 
-            self._all_values = json.dumps(status)
-            
             if "I10211" in status:
                 if float(status["I10211"]) > 1300:
                     self._outside_temp = round(
@@ -389,12 +391,12 @@ class AtreaDevice(ClimateEntity):
             else:
                 self._current_fan_mode = str(self._requested_power) + "%"
 
-            if("C10215" in status):
+            if "C10215" in status:
                 self._heating = int(status["C10215"])
             else:
                 self._heating = -1
 
-            if("C10216" in status):
+            if "C10216" in status:
                 self._cooling = int(status["C10216"])
             else:
                 self._cooling = -1
@@ -406,7 +408,7 @@ class AtreaDevice(ClimateEntity):
 
             self._current_preset = self.atrea.getMode()
             if self._current_preset == AtreaMode.OFF:
-                self._current_hvac_mode = HVAC_MODE_OFF
+                self._current_hvac_mode = HVACMode.OFF
 
             if('I10205' in status):
                 # Converting IN1 value to ppm 
@@ -476,23 +478,23 @@ class AtreaDevice(ClimateEntity):
             if program == AtreaProgram.MANUAL:
                 self.air_handling_control = "Manual"
                 if self.atrea.getValue("H10705") == 0:
-                    self._current_hvac_mode = HVAC_MODE_OFF
+                    self._current_hvac_mode = HVACMode.OFF
                 else:
-                    self._current_hvac_mode = HVAC_MODE_FAN_ONLY
+                    self._current_hvac_mode = HVACMode.FAN_ONLY
             elif program == AtreaProgram.WEEKLY:
                 self.air_handling_control = "Schedule"
-                self._current_hvac_mode = HVAC_MODE_AUTO
+                self._current_hvac_mode = HVACMode.AUTO
             elif program == AtreaProgram.TEMPORARY:
                 self.air_handling_control = "Temporary"
                 if self.atrea.getValue("H10705") == 0:
-                    self._current_hvac_mode = HVAC_MODE_OFF
+                    self._current_hvac_mode = HVACMode.OFF
                 else:
-                    self._current_hvac_mode = HVAC_MODE_FAN_ONLY
+                    self._current_hvac_mode = HVACMode.FAN_ONLY
             else:
                 self.air_handling_control = "Unknown (" + str(program) + ")"
 
             if self._current_fan_mode == "0%":
-                self._current_hvac_mode = HVAC_MODE_OFF
+                self._current_hvac_mode = HVACMode.OFF
 
             # todo fix warning not translated
             params = self.atrea.getParams()
@@ -535,13 +537,13 @@ class AtreaDevice(ClimateEntity):
     async def async_turn_on(self):
         if self.air_handling_control == "Manual":
             self.atrea.setProgram(AtreaProgram.MANUAL)
-            self._current_hvac_mode = HVAC_MODE_FAN_ONLY
+            self._current_hvac_mode = HVACMode.FAN_ONLY
         elif self.air_handling_control == "Schedule":
             self.atrea.setProgram(AtreaProgram.WEEKLY)
-            self._current_hvac_mode = HVAC_MODE_AUTO
+            self._current_hvac_mode = HVACMode.AUTO
         elif self.air_handling_control == "Temporary":
             self.atrea.setProgram(AtreaProgram.TEMPORARY)
-            self._current_hvac_mode = HVAC_MODE_FAN_ONLY
+            self._current_hvac_mode = HVACMode.FAN_ONLY
         self.atrea.setMode(AtreaMode.VENTILATION)
 
         self.updatePending = True
@@ -559,7 +561,7 @@ class AtreaDevice(ClimateEntity):
         else:
             self.atrea.setProgram(AtreaProgram.WEEKLY)
 
-        self._current_hvac_mode = HVAC_MODE_OFF
+        self._current_hvac_mode = HVACMode.OFF
         self.atrea.setMode(AtreaMode.OFF)
 
         self.updatePending = True
@@ -572,16 +574,16 @@ class AtreaDevice(ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode):
         mode = None
         program = None
-        if hvac_mode == HVAC_MODE_AUTO:
-            self._current_hvac_mode = HVAC_MODE_AUTO
+        if hvac_mode == HVACMode.AUTO:
+            self._current_hvac_mode = HVACMode.AUTO
             program = AtreaProgram.WEEKLY
-        elif hvac_mode == HVAC_MODE_FAN_ONLY:
+        elif hvac_mode == HVACMode.FAN_ONLY:
             mode = AtreaMode.VENTILATION
             program = AtreaProgram.MANUAL
-            self._current_hvac_mode = HVAC_MODE_FAN_ONLY
-        elif hvac_mode == HVAC_MODE_OFF:
+            self._current_hvac_mode = HVACMode.FAN_ONLY
+        elif hvac_mode == HVACMode.OFF:
             await self.async_turn_off()
-            self._current_hvac_mode = HVAC_MODE_OFF
+            self._current_hvac_mode = HVACMode.OFF
 
         if program != None and program != await self.hass.async_add_executor_job(
             self.atrea.getProgram
@@ -661,14 +663,14 @@ class AtreaDevice(ClimateEntity):
 
         LOGGER.debug("Setting zone to %s", str(self._zone))
 
-        #Have to set H10703 as it gets reset by the setProgram method
+        # Have to set H10703 as it gets reset by the setProgram method
         if(self.atrea.getValue("H10703") == 1):
             self.atrea.setCommand("H10703", 2)
         self.atrea.setCommand("H10711", int(self._zone))
         if (self.atrea.exec() == False):
             LOGGER.debug("Zone set succesfully to %s", str(self._zone))
-        else: 
+        else:
             LOGGER.error("Error setting zone")
-        
+
         self.manualUpdate()
 

@@ -2,16 +2,11 @@ import logging
 from datetime import timedelta
 
 from homeassistant.components.climate.const import (
-    SUPPORT_PRESET_MODE,
-    SUPPORT_TARGET_TEMPERATURE,
-    HVAC_MODE_OFF,
-    HVAC_MODE_AUTO,
-    HVAC_MODE_FAN_ONLY,
-    SUPPORT_FAN_MODE,
-    SUPPORT_SWING_MODE, 
-    SWING_VERTICAL, 
-    SWING_HORIZONTAL, 
-    SWING_BOTH,
+    ClimateEntityFeature,
+    HVACMode,
+    SWING_VERTICAL,
+    SWING_HORIZONTAL,
+    SWING_BOTH
 )
 from pyatrea import AtreaMode
 
@@ -19,7 +14,7 @@ DOMAIN = "atrea"
 LOGGER = logging.getLogger(__name__)
 UPDATE_DELAY = 1  # update delay disabled
 MIN_TIME_BETWEEN_SCANS = timedelta(seconds=10)
-SUPPORT_FLAGS = SUPPORT_TARGET_TEMPERATURE | SUPPORT_FAN_MODE | SUPPORT_PRESET_MODE | SUPPORT_SWING_MODE
+SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE | ClimateEntityFeature.SWING_MODE
 DEFAULT_NAME = "Atrea"
 STATE_MANUAL = "manual"
 STATE_UNKNOWN = "unknown"
@@ -71,7 +66,6 @@ ICONS = {
     AtreaMode.D4: "mdi:fan-chevron-up",
 }
 
-HVAC_MODES = [HVAC_MODE_OFF, HVAC_MODE_AUTO, HVAC_MODE_FAN_ONLY]
-
+HVAC_MODES = [HVACMode.OFF, HVACMode.AUTO, HVACMode.FAN_ONLY]
 # SWING_VERTICAL = Zone 0, SWING_HORIZONTAL = Zone 1, SWING_BOTH = Zone 2
 SWING_MODES = [SWING_VERTICAL, SWING_HORIZONTAL, SWING_BOTH]
