@@ -30,8 +30,7 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    await hass.config_entries.async_forward_entry_unload(entry, "climate")
-    await hass.config_entries.async_forward_entry_unload(entry, "update")
+    await hass.config_entries.async_unload_platforms(entry, ["climate", "update"])
     return True
 
 
@@ -46,9 +45,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         hass.data[DOMAIN][entry.entry_id]["supportedModes"] = (
             await hass.async_add_executor_job(atrea.getSupportedModes)
         ).items()
-        hass.data[DOMAIN][entry.entry_id][
-            "userLabels"
-        ] = await hass.async_add_executor_job(atrea.loadUserLabels)
+        hass.data[DOMAIN][entry.entry_id]["userLabels"] = (
+            await hass.async_add_executor_job(atrea.loadUserLabels)
+        )
+        hass.data[DOMAIN][entry.entry_id]["supportedForcedModes"] = (
+            await hass.async_add_executor_job(atrea.getSupportedForcedModes)
+        ).items()
 
     atreaCoordinator = DataUpdateCoordinator(
         hass,
@@ -79,6 +81,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 await hass.async_add_executor_job(atrea.getSupportedModes)
             ).items(),
             "userLabels": (await hass.async_add_executor_job(atrea.loadUserLabels)),
+            "supportedForcedModes": (
+                await hass.async_add_executor_job(atrea.getSupportedForcedModes)
+            ).items(),
             "status": status,
             "model": (await hass.async_add_executor_job(atrea.getModel)),
             "params": (await hass.async_add_executor_job(atrea.getParams, False)),
@@ -87,10 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         }
         entry.async_on_unload(hass.data[DOMAIN][entry.entry_id]["update_listener"])
 
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, "climate")
-        )
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, "update")
+        await hass.async_create_task(
+            hass.config_entries.async_forward_entry_setups(entry, ["climate", "update"])
         )
         return True
