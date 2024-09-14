@@ -94,6 +94,8 @@ class AtreaDevice(ClimateEntity):
         self._outside_temp = 0.0
         self._inside_temp = 0.0
         self._supply_air_temp = 0.0
+        self._exhaust_temp = 0.0
+        self._extract_temp = 0.0
         self._requested_temp = 0.0
         self._requested_power = None
         self._co2 = 0.0
@@ -109,7 +111,9 @@ class AtreaDevice(ClimateEntity):
         self._oda_req = 0
         self._oda_act_flow = 0
         self._sc_voltage = 0.0
-
+        self._active_inputs = []
+        self._forced_mode = None
+        self._current_power = None
         self._current_preset = None
         self._current_hvac_mode = None
         self._unit = "Status"
@@ -217,6 +221,8 @@ class AtreaDevice(ClimateEntity):
         attributes["inside_temp"] = self._inside_temp
         attributes["supply_air_temp"] = self._supply_air_temp
         attributes["requested_temp"] = self._requested_temp
+        attributes["exhaust_temp"] = self._exhaust_temp
+        attributes["extract_temp"]= self._extract_temp
         attributes["requested_power"] = self._requested_power
         attributes["warnings"] = self._warnings
         attributes["alerts"] = self._alerts
@@ -235,6 +241,9 @@ class AtreaDevice(ClimateEntity):
         attributes['oda_required'] = self._oda_req
         attributes['oda_actual_flow'] = self._oda_act_flow
         attributes['sc_voltage'] = self._sc_voltage
+        attributes["active_inputs"] = self._active_inputs
+        attributes["forced_mode"] = self._forced_mode.name
+        attributes["current_power"] = self._current_power
 
         if self._heating == 1:
             attributes["hvac_action"] = HVACAction.HEATING
@@ -340,6 +349,7 @@ class AtreaDevice(ClimateEntity):
         self._swVersion = self.atrea.getVersion()
         self._warnings = []
         self._alerts = []
+        self._active_inputs = []
         if status != False:
 
             if "I10211" in status:
@@ -376,6 +386,12 @@ class AtreaDevice(ClimateEntity):
             elif "I00200" in status:
                 self._supply_air_temp = self.atrea.getValue("I00200")
 
+            if "I10214" in status:
+                self._exhaust_temp = float(status["I10214"]) / 10
+
+            if "I10213" in status:
+                self._extract_temp = float(status["I10213"]) / 10
+
             if "H10706" in status:
                 self._requested_temp = float(status["H10706"]) / 10
             elif "H01006" in status:
@@ -405,6 +421,17 @@ class AtreaDevice(ClimateEntity):
                 self._zone = int(status["H10711"])
             else:
                 self._zone = -1
+
+            # D1..D4 inputs are reported in D10200..D10203
+            for inpt in range(4):
+                entry = f"D1020{inpt}"
+                if entry in status and int(status[entry]):
+                    self._active_inputs.append(f"D{inpt + 1}")
+
+            self._forced_mode = self.atrea.getForcedMode()
+
+            if "H10704" in status:
+                self._current_power = int(status["H10704"])
 
             self._current_preset = self.atrea.getMode()
             if self._current_preset == AtreaMode.OFF:
@@ -646,7 +673,7 @@ class AtreaDevice(ClimateEntity):
                 str(temperature),
             )
 
-    def set_swing_mode(self, swing_mode):
+    async def async_set_swing_mode(self, swing_mode):
         """Set new target swing operation."""
         LOGGER.debug("Setting swing mode to %s", str(swing_mode))
 
@@ -667,10 +694,11 @@ class AtreaDevice(ClimateEntity):
         if(self.atrea.getValue("H10703") == 1):
             self.atrea.setCommand("H10703", 2)
         self.atrea.setCommand("H10711", int(self._zone))
-        if (self.atrea.exec() == False):
-            LOGGER.debug("Zone set succesfully to %s", str(self._zone))
-        else:
-            LOGGER.error("Error setting zone")
 
+        self.updatePending = True
+        await self.hass.async_add_executor_job(self.atrea.exec)
+        await self._coordinator.async_request_refresh()
+        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
         self.manualUpdate()
+        self.updatePending = False
 
