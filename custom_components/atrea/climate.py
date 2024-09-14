@@ -673,7 +673,7 @@ class AtreaDevice(ClimateEntity):
                 str(temperature),
             )
 
-    def set_swing_mode(self, swing_mode):
+    async def async_set_swing_mode(self, swing_mode):
         """Set new target swing operation."""
         LOGGER.debug("Setting swing mode to %s", str(swing_mode))
 
@@ -694,10 +694,11 @@ class AtreaDevice(ClimateEntity):
         if(self.atrea.getValue("H10703") == 1):
             self.atrea.setCommand("H10703", 2)
         self.atrea.setCommand("H10711", int(self._zone))
-        if (self.atrea.exec() == False):
-            LOGGER.debug("Zone set succesfully to %s", str(self._zone))
-        else:
-            LOGGER.error("Error setting zone")
 
+        self.updatePending = True
+        await self.hass.async_add_executor_job(self.atrea.exec)
+        await self._coordinator.async_request_refresh()
+        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
         self.manualUpdate()
+        self.updatePending = False
 
