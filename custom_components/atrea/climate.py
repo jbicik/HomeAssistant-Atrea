@@ -8,6 +8,8 @@ from homeassistant.components.climate.const import HVACAction
 
 
 from custom_components.atrea.utils import processFanModes
+from custom_components.atrea.utils import getFanPercent
+from custom_components.atrea.utils import replaceFanModes
 
 try:
     from homeassistant.components.climate import ClimateEntity, PLATFORM_SCHEMA
@@ -20,7 +22,7 @@ from homeassistant.components.climate.const import (
     SWING_VERTICAL, 
     SWING_HORIZONTAL, 
     SWING_BOTH,
-    HVACMode
+    HVACMode,
 )
 from homeassistant.const import (
     CONF_NAME,
@@ -47,6 +49,7 @@ from .const import (
     ICONS,
     HVAC_MODES,
     SWING_MODES,
+    FAN_MODE_LABELS,
 )
 
 
@@ -138,7 +141,8 @@ class AtreaDevice(ClimateEntity):
             self.async_schedule_update_ha_state(True)
 
     def updateFanList(self, fan_list, updateState=True):
-        self._fan_list = processFanModes(fan_list)
+#        self._fan_list = processFanModes(fan_list)
+        self._fan_list = list(FAN_MODE_LABELS.values())
         if updateState:
             self.async_schedule_update_ha_state(True)
 
@@ -403,9 +407,13 @@ class AtreaDevice(ClimateEntity):
                 self._requested_power = int(self.atrea.getValue("H01005"))
 
             if "H01001" in status:
-                self._current_fan_mode = str(int(self.atrea.getValue("H01001"))) + "%"
+#                self._current_fan_mode = str(int(self.atrea.getValue("H01001"))) + "%"
+# Set this conditionally based on mode
+                self._current_fan_mode = FAN_MODE_LABELS.get(int(self.atrea.getValue("H01001")), False)
             else:
+
                 self._current_fan_mode = str(self._requested_power) + "%"
+            LOGGER.debug("Current fan mode: %s", self._current_fan_mode)
 
             if "C10215" in status:
                 self._heating = int(status["C10215"])
@@ -539,11 +547,15 @@ class AtreaDevice(ClimateEntity):
             self.async_schedule_update_ha_state(True)
 
     async def async_set_fan_mode(self, fan_mode):
-        fan_percent = int(re.sub("[^0-9]", "", fan_mode))
-        if fan_percent < 12:
-            fan_percent = 12
-        if fan_percent > 100:
-            fan_percent = 100
+#        fan_percent = int(re.sub("[^0-9]", "", fan_mode))
+#        if fan_percent < 12:
+#            fan_percent = 12
+#        if fan_percent > 100:
+#            fan_percent = 100
+        LOGGER.debug("Setting new fan mode: %s", str(fan_mode))
+        fan_percent = getFanPercent(fan_mode)
+        LOGGER.debug("Setting new fan percent: %s", str(fan_percent))
+
         if fan_percent >= 12 and fan_percent <= 100:
             if (
                 await self.hass.async_add_executor_job(self.atrea.getProgram)
@@ -701,4 +713,3 @@ class AtreaDevice(ClimateEntity):
         await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
         self.manualUpdate()
         self.updatePending = False
-

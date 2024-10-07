@@ -6,9 +6,9 @@ from .const import (
     ALL_PRESET_LIST,
     CONF_FAN_MODES,
     DEFAULT_FAN_MODE_LIST,
+    FAN_MODE_LABELS,
 )
 from homeassistant.const import CONF_NAME
-
 
 def isAtreaUnit(host, port):
     atrea = Atrea(host, port)
@@ -31,7 +31,6 @@ def processFanModes(fan_modes):
         convertedFanMode.append(fan_mode)
     return convertedFanMode
 
-
 async def update_listener(hass, entry):
     preset_list = entry.data.get(CONF_PRESETS)
     if preset_list is None:
@@ -47,3 +46,16 @@ async def update_listener(hass, entry):
     hass.data[DOMAIN][entry.entry_id]["climate"].updateName(sensor_name)
     hass.data[DOMAIN][entry.entry_id]["update"].updateName(sensor_name)
 
+def getFanPercent(fan_mode):
+    for key, value in FAN_MODE_LABELS.items():
+        if value == fan_mode:
+            return key
+    return False
+
+
+def replaceFanModes(fan_modes):
+    convertedFanMode = []
+    for fan_mode in fan_modes:
+        fan_mode = fan_mode.strip().rstrip("%")
+        convertedFanMode.append(FAN_MODE_LABELS.get(fan_mode, False))
+    return convertedFanMode

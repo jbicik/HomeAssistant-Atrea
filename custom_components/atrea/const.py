@@ -69,3 +69,22 @@ ICONS = {
 HVAC_MODES = [HVACMode.OFF, HVACMode.AUTO, HVACMode.FAN_ONLY]
 # SWING_VERTICAL = Zone 0, SWING_HORIZONTAL = Zone 1, SWING_BOTH = Zone 2
 SWING_MODES = [SWING_VERTICAL, SWING_HORIZONTAL, SWING_BOTH]
+
+FAN_MODE_LABELS = {
+    0: "Off",
+    10: "Min-Vent",
+    11: "Norm-Vent",
+    12: "Max-Vent",
+    20: "Min-Circ",
+    21: "Norm-Circ",
+    22: "Max-Circ",
+    30: "Min/Min",
+    31: "Min/Norm",
+    32: "Min/Max",
+    33: "Norm/Min",
+    34: "Norm/Norm",
+    35: "Norm/Max",
+    36: "Max/Min",
+    37: "Max/Norm",
+    38: "Max/Max",
+}
