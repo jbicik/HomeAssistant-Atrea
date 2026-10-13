@@ -6,7 +6,7 @@ from homeassistant.components.climate.const import (
     HVACMode,
     SWING_VERTICAL,
     SWING_HORIZONTAL,
-    SWING_BOTH
+    SWING_BOTH,
 )
 from pyatrea import AtreaMode
 
@@ -14,7 +14,14 @@ DOMAIN = "atrea"
 LOGGER = logging.getLogger(__name__)
 UPDATE_DELAY = 1  # update delay disabled
 MIN_TIME_BETWEEN_SCANS = timedelta(seconds=10)
-SUPPORT_FLAGS = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE | ClimateEntityFeature.SWING_MODE
+SUPPORT_FLAGS = (
+    ClimateEntityFeature.TARGET_TEMPERATURE
+    | ClimateEntityFeature.FAN_MODE
+    | ClimateEntityFeature.PRESET_MODE
+    | ClimateEntityFeature.TURN_OFF
+    | ClimateEntityFeature.TURN_ON
+    | ClimateEntityFeature.SWING_MODE
+)
 DEFAULT_NAME = "Atrea"
 STATE_MANUAL = "manual"
 STATE_UNKNOWN = "unknown"

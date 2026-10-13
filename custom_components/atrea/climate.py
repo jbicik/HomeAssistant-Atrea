@@ -7,7 +7,7 @@ from homeassistant.util import slugify
 from homeassistant.components.climate.const import HVACAction
 
 
-from custom_components.atrea.utils import processFanModes
+from custom_components.atrea.utils import convert_temperature, processFanModes
 
 try:
     from homeassistant.components.climate import ClimateEntity, PLATFORM_SCHEMA
@@ -114,6 +114,9 @@ class AtreaDevice(ClimateEntity):
         self._active_inputs = []
         self._forced_mode = None
         self._current_power = None
+        self._in1 = None
+        self._in2 = None
+        self._sa1 = None
         self._current_preset = None
         self._current_hvac_mode = None
         self._unit = "Status"
@@ -245,6 +248,13 @@ class AtreaDevice(ClimateEntity):
         attributes["forced_mode"] = self._forced_mode.name
         attributes["current_power"] = self._current_power
 
+        if self._in1 is not None:
+            attributes["in1"] = self._in1
+        if self._in2 is not None:
+            attributes["in2"] = self._in2
+        if self._sa1 is not None:
+            attributes["sa1"] = self._sa1
+
         if self._heating == 1:
             attributes["hvac_action"] = HVACAction.HEATING
         elif self._cooling == 1:
@@ -353,12 +363,7 @@ class AtreaDevice(ClimateEntity):
         if status != False:
 
             if "I10211" in status:
-                if float(status["I10211"]) > 1300:
-                    self._outside_temp = round(
-                        ((50 - (float(status["I10211"]) - 65036) / 10) * -1), 1
-                    )
-                else:
-                    self._outside_temp = float(status["I10211"]) / 10
+                self._outside_temp = convert_temperature(status["I10211"])
             elif "I00202" in status:
                 if self.atrea.getValue("I00202") == 126.0:
                     if self.atrea.getValue("H00511") == 1:
@@ -368,29 +373,20 @@ class AtreaDevice(ClimateEntity):
                 else:
                     self._outside_temp = self.atrea.getValue("I00202")
 
-            # Depending on configuration of ventilation unit, indoor temp is read from different addresses
-            if "H10514" in status:
-                if int(status["H10514"]) == 1:
-                    self._inside_temp = float(status["I10203"]) / 10
-                elif int(status["H10514"]) == 0:
-                    self._inside_temp = float(status["I10207"]) / 10
-                else:
-                    LOGGER.warn(
-                        "Indoor sensor not supported yet. Please contact repository owner with information about your unit."
-                    )
-            elif "I00210" in status:
-                self._inside_temp = self.atrea.getValue("I00210")
+            # inside temperature is defined by T-IDA
+            if "I10215" in status:
+                self._inside_temp = convert_temperature(status["I10215"])
 
-            if "I10200" in status:
-                self._supply_air_temp = float(status["I10200"]) / 10
+            if "I10212" in status:
+                self._supply_air_temp = convert_temperature(status["I10212"])
             elif "I00200" in status:
                 self._supply_air_temp = self.atrea.getValue("I00200")
 
             if "I10214" in status:
-                self._exhaust_temp = float(status["I10214"]) / 10
+                self._exhaust_temp = convert_temperature(status["I10214"])
 
             if "I10213" in status:
-                self._extract_temp = float(status["I10213"]) / 10
+                self._extract_temp = convert_temperature(status["I10213"])
 
             if "H10706" in status:
                 self._requested_temp = float(status["H10706"]) / 10
@@ -421,6 +417,18 @@ class AtreaDevice(ClimateEntity):
                 self._zone = int(status["H10711"])
             else:
                 self._zone = -1
+
+            # Input IN1
+            if "I10205" in status:
+                self._in1 = int(status["I10205"])
+
+            # Input IN2
+            if "I10206" in status:
+                self._in2 = int(status["I10206"])
+
+            # Output SA1
+            if "H10202" in status:
+                self._sa1 = int(status["H10202"])
 
             # D1..D4 inputs are reported in D10200..D10203
             for inpt in range(4):
