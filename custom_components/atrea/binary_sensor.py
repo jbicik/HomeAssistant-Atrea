@@ -18,6 +18,8 @@ BINARY_SENSOR_REGISTERS = {
     "D10203": ("D4 input", "mdi:electric-switch"),
     "D10207": ("Heat pump defrost", "mdi:snowflake-melt"),
     "D11183": ("Filter change required", "mdi:air-filter"),
+    "C10215": ("Heat pump heating", "mdi:heat-pump"),
+    "C10216": ("Heat pump cooling", "mdi:snowflake"),
 }
 
 
@@ -83,13 +85,16 @@ class AtreaRegisterBinarySensor(CoordinatorEntity, BinarySensorEntity):
         return (
             super().available
             and self._register in (self._data.get("status") or {})
+            and self.is_on is not None
         )
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether heat-pump defrost is active."""
+        """Return whether the operating state is active."""
         value = (self._data.get("status") or {}).get(self._register)
-        return None if value is None else str(value) == "1"
+        if str(value) not in ("0", "1"):
+            return None
+        return str(value) == "1"
 
     @property
     def extra_state_attributes(self) -> dict:
