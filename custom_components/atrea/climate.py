@@ -686,27 +686,33 @@ class AtreaDevice(ClimateEntity):
         LOGGER.debug("Setting swing mode to %s", str(swing_mode))
 
         if (swing_mode == SWING_VERTICAL):
-            self._zone = 0;
+            zone = 0
         elif (swing_mode == SWING_HORIZONTAL):
-            self._zone = 1;
+            zone = 1
         elif (swing_mode == SWING_BOTH):
-            self._zone = 2;
+            zone = 2
         else:
             LOGGER.warn(
                 "Zone setting (%s) is not supported.", str(swing_mode))
             return
 
-        LOGGER.debug("Setting zone to %s", str(self._zone))
-
-        # Have to set H10703 as it gets reset by the setProgram method
-        if(self.atrea.getValue("H10703") == 1):
-            self.atrea.setCommand("H10703", 2)
-        self.atrea.setCommand("H10711", int(self._zone))
-
+        LOGGER.debug("Setting zone to %s", zone)
         self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        try:
+            # Transition H10703 from 1 to 2 before applying the zone.
+            if self.atrea.getValue("H10703") == 1:
+                self.atrea.setCommand("H10703", 2)
+            self.atrea.setCommand("H10711", zone)
+
+            result = await self.hass.async_add_executor_job(self.atrea.exec)
+            if result is not False:
+                LOGGER.error("Error setting zone to %s", zone)
+
+            await self._coordinator.async_request_refresh()
+            await self.hass.async_add_executor_job(
+                time.sleep, UPDATE_DELAY / 1000
+            )
+            self.manualUpdate()
+        finally:
+            self.updatePending = False
 
