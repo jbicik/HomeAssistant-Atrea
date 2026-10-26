@@ -26,8 +26,10 @@ buttons report that their condition cannot be acknowledged because the web UI
 does not provide an acknowledgement action for them.
 
 IN1 and IN2 are exposed as voltage sensors and SA1 as a percentage sensor. The
-input voltages can be converted to measurements such as CO2 concentration
-according to the scaling specified by the connected 0–10 V sensor.
+CO₂ sensor uses a configurable formula in the integration options. In the
+formula, `x` is the IN1 voltage in volts and the result is ppm. The default
+`round(x * 200)` preserves the previous conversion; leave the formula empty to
+disable the CO₂ sensor.
 
 The integration also exposes airflow requirements and measurements, and
 heat-pump defrost state when their registers are available. Airflow values are
@@ -37,3 +39,9 @@ R5 units.
 Outdoor, averaged outdoor, supply, extract, exhaust, and indoor air
 temperatures are available as native sensors. D1–D4 inputs are exposed as
 binary sensors.
+
+Swing modes are enabled automatically when the unit's `H10511` register is
+set to `1` (zone control). Their current state is read from `H10707`; `H10711`
+is the last manually selected zone and may differ while a schedule is active.
+The integration options allow overriding automatic detection and changing the
+three displayed zone labels.

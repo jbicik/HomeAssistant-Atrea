@@ -12,6 +12,7 @@ from homeassistant.const import (
     CONF_IP_ADDRESS,
     CONF_NAME,
     PERCENTAGE,
+    UnitOfRatio,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
@@ -19,10 +20,17 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
 from .const import DOMAIN
-from .utils import convert_temperature
+from .const import CONF_CO2_FORMULA, DEFAULT_CO2_FORMULA
+from .utils import convert_co2_voltage, convert_temperature
 
 VOLT = "V"
 VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR = "m³/h"
+
+
+def convert_millivolts_to_volts(value) -> float:
+    """Convert an ATREA voltage register from millivolts to volts."""
+    return int(value) / 1000
+
 
 SENSOR_REGISTERS = {
     "I10211": {
@@ -96,6 +104,30 @@ SENSOR_REGISTERS = {
         "device_class": None,
         "convert": lambda value: int(value) * 10,
     },
+    "H10200": {
+        "key": "supply_fan_voltage",
+        "name": "Supply fan voltage",
+        "unit": VOLT,
+        "device_class": SensorDeviceClass.VOLTAGE,
+        "display_precision": 3,
+        "convert": convert_millivolts_to_volts,
+    },
+    "H10201": {
+        "key": "extract_fan_voltage",
+        "name": "Extract fan voltage",
+        "unit": VOLT,
+        "device_class": SensorDeviceClass.VOLTAGE,
+        "display_precision": 3,
+        "convert": convert_millivolts_to_volts,
+    },
+    "H10204": {
+        "key": "sc_voltage",
+        "name": "SC voltage",
+        "unit": VOLT,
+        "device_class": SensorDeviceClass.VOLTAGE,
+        "display_precision": 3,
+        "convert": convert_millivolts_to_volts,
+    },
     "I11600": {
         "key": "supply_requested_airflow",
         "name": "Supply requested airflow",
@@ -146,7 +178,6 @@ SENSOR_REGISTERS = {
     },
 }
 
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -155,23 +186,45 @@ async def async_setup_entry(
     """Create sensors for registers supported by the unit."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
-    known_registers: set[str] = set()
+    known_sensor_keys: set[str] = set()
+    co2_formula = entry.options.get(
+        CONF_CO2_FORMULA,
+        entry.data.get(CONF_CO2_FORMULA, DEFAULT_CO2_FORMULA),
+    )
+    sensor_definitions = list(SENSOR_REGISTERS.items())
+    if co2_formula.strip():
+        sensor_definitions.append(
+            (
+                "I10205",
+                {
+                    "key": "co2",
+                    "name": "CO₂ concentration",
+                    "unit": UnitOfRatio.PARTS_PER_MILLION,
+                    "device_class": SensorDeviceClass.CO2,
+                    "display_precision": 0,
+                    "convert": lambda value: convert_co2_voltage(
+                        co2_formula, int(value) / 1000
+                    ),
+                },
+            )
+        )
 
     def async_discover_sensors() -> None:
         status = data.get("status") or {}
         entities = []
 
-        for register, description in SENSOR_REGISTERS.items():
+        for register, description in sensor_definitions:
+            sensor_key = description["key"]
             if (
                 register not in status
-                or register in known_registers
+                or sensor_key in known_sensor_keys
                 or (
                     description.get("constant_flow_only")
                     and str(status.get("H10510")) != "1"
                 )
             ):
                 continue
-            known_registers.add(register)
+            known_sensor_keys.add(sensor_key)
             entities.append(
                 AtreaRegisterSensor(entry, data, register, description)
             )

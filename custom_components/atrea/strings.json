@@ -38,6 +38,11 @@
           "presets": "Enabled presets",
           "ip_address": "IP Address",
           "password": "Password",
+          "co2_formula": "CO₂ formula (x = IN1 voltage in volts; output in ppm; leave empty to disable)",
+          "swing_mode_policy": "Swing modes",
+          "swing_label_zone_1": "Zone 1 mode label",
+          "swing_label_zone_2": "Zone 2 mode label",
+          "swing_label_both_zones": "Both zones mode label",
           "Off": "Off",
           "Automatic": "Automatic",
           "Ventilation": "Ventilation",
@@ -60,14 +65,16 @@
           "D4": "D4",
           "fan_modes": "Fan modes"
         },
-        "description": "Modify settings of your Atrea unit."
+        "description": "Modify settings of your Atrea unit. CO₂ formula examples: x * 200 or max(0, (x - 0.5) * 500). Supported operators: +, -, *, /, **. Supported functions: abs, min, max, round. Swing modes are detected from H10511 in Auto mode; customize their displayed labels below."
       }
     },
     "error": {
       "already_configured": "IP address already configured",
       "invalid_auth": "Incorrect password or too many signed in users.",
       "not_atrea_unit": "Discovered device is not a supported Atrea unit",
-      "invalid_fan_mode": "Invalid fan mode format, use only comma and numbers between 12 and 100."
+      "invalid_fan_mode": "Invalid fan mode format, use only comma and numbers between 12 and 100.",
+      "invalid_co2_formula": "Invalid CO₂ formula. Use x for the IN1 voltage in volts and a supported arithmetic expression.",
+      "invalid_swing_configuration": "Choose a valid swing mode policy and enter three unique, non-empty labels when swing modes are enabled."
     }
   }
 }

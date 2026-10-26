@@ -4,7 +4,7 @@ import json
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import slugify
-from homeassistant.components.climate.const import HVACAction
+from homeassistant.components.climate.const import ClimateEntityFeature, HVACAction
 
 
 from custom_components.atrea.utils import convert_temperature, processFanModes
@@ -17,9 +17,6 @@ except ImportError:
         PLATFORM_SCHEMA,
     )
 from homeassistant.components.climate.const import (
-    SWING_VERTICAL, 
-    SWING_HORIZONTAL, 
-    SWING_BOTH,
     HVACMode
 )
 from homeassistant.const import (
@@ -46,7 +43,12 @@ from .const import (
     ALL_PRESET_LIST,
     ICONS,
     HVAC_MODES,
-    SWING_MODES,
+    CONF_SWING_MODE_POLICY,
+    DEFAULT_SWING_MODE_POLICY,
+    CONF_SWING_LABEL_ZONE_1,
+    CONF_SWING_LABEL_ZONE_2,
+    CONF_SWING_LABEL_BOTH_ZONES,
+    DEFAULT_SWING_LABELS,
 )
 
 
@@ -98,19 +100,6 @@ class AtreaDevice(ClimateEntity):
         self._extract_temp = 0.0
         self._requested_temp = 0.0
         self._requested_power = None
-        self._co2 = 0.0
-        self._vent_air_temp = 0.0
-        self._filter_change = 0
-        self._defrost = 0
-        self._sup_req = 0
-        self._sup_act_flow = 0
-        self._sup_fan_voltage = 0.0
-        self._eta_req = 0
-        self._eta_act_flow = 0
-        self._eta_fan_voltage = 0.0
-        self._oda_req = 0
-        self._oda_act_flow = 0
-        self._sc_voltage = 0.0
         self._active_inputs = []
         self._forced_mode = None
         self._current_power = None
@@ -125,6 +114,16 @@ class AtreaDevice(ClimateEntity):
         self._cooling = -1
         self._heating = -1
         self._zone = -1
+        self._swing_mode_policy = entry.options.get(
+            CONF_SWING_MODE_POLICY, DEFAULT_SWING_MODE_POLICY
+        )
+        self._swing_labels = (
+            entry.options.get(CONF_SWING_LABEL_ZONE_1, DEFAULT_SWING_LABELS[0]),
+            entry.options.get(CONF_SWING_LABEL_ZONE_2, DEFAULT_SWING_LABELS[1]),
+            entry.options.get(
+                CONF_SWING_LABEL_BOTH_ZONES, DEFAULT_SWING_LABELS[2]
+            ),
+        )
 
         self.updatePresetList(preset_list, False)
         self.updateFanList(fan_list, False)
@@ -206,7 +205,22 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def supported_features(self):
-        return SUPPORT_FLAGS
+        features = SUPPORT_FLAGS
+        if self._is_swing_mode_enabled():
+            features |= ClimateEntityFeature.SWING_MODE
+        return features
+
+    def _is_swing_mode_enabled(self):
+        """Respect the configured override or auto-detect configured zones."""
+        policy = self._swing_mode_policy
+        if policy == "enabled":
+            return True
+        if policy == "disabled":
+            return False
+        try:
+            return int((self.data.get("status") or {}).get("H10511", 0)) == 1
+        except (TypeError, ValueError):
+            return False
 
     @property
     def unique_id(self) -> str:
@@ -231,19 +245,6 @@ class AtreaDevice(ClimateEntity):
         attributes["alerts"] = self._alerts
         attributes["program"] = self.air_handling_control
         attributes['zone'] = self._zone
-        attributes['co2'] = self._co2
-        attributes['vent_air_temp'] = self._vent_air_temp
-        attributes['filter_change'] = self._filter_change
-        attributes['defrost'] = self._defrost
-        attributes['supply_required'] = self._sup_req
-        attributes['supply_actual_flow'] = self._sup_act_flow
-        attributes['supply_fan_voltage'] = self._sup_fan_voltage
-        attributes['eta_required'] = self._eta_req
-        attributes['eta_actual_flow'] = self._eta_act_flow
-        attributes['eta_fan_voltage'] = self._eta_fan_voltage
-        attributes['oda_required'] = self._oda_req
-        attributes['oda_actual_flow'] = self._oda_act_flow
-        attributes['sc_voltage'] = self._sc_voltage
         attributes["active_inputs"] = self._active_inputs
         attributes["forced_mode"] = self._forced_mode.name
         attributes["current_power"] = self._current_power
@@ -331,17 +332,13 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def swing_modes(self):
-        return SWING_MODES
+        return list(self._swing_labels) if self._is_swing_mode_enabled() else []
 
     @property
     def swing_mode(self):
-        if (self._zone == 0):
-            return SWING_VERTICAL;
-        if (self._zone == 1):
-            return SWING_HORIZONTAL;
-        if (self._zone == 2):
-            return SWING_BOTH;
-        return None
+        if not self._is_swing_mode_enabled() or self._zone not in (0, 1, 2):
+            return None
+        return self._swing_labels[self._zone]
 
     @Throttle(MIN_TIME_BETWEEN_SCANS)
     async def async_update(self):
@@ -413,8 +410,10 @@ class AtreaDevice(ClimateEntity):
             else:
                 self._cooling = -1
 
-            if("H10711" in status):
-                self._zone = int(status["H10711"])
+            if "H10707" in status:
+                # H10707 is the currently requested zone. H10711 only stores
+                # the last manually selected zone, which can differ in a schedule.
+                self._zone = int(status["H10707"])
             else:
                 self._zone = -1
 
@@ -444,70 +443,6 @@ class AtreaDevice(ClimateEntity):
             self._current_preset = self.atrea.getMode()
             if self._current_preset == AtreaMode.OFF:
                 self._current_hvac_mode = HVACMode.OFF
-
-            if('I10205' in status):
-                # Converting IN1 value to ppm 
-                self._co2 = round(float(status['I10205'])*0.2, 0)
-            else:
-                self._co2 = -1
-
-            if('I10214' in status):
-                self._vent_air_temp = float(status['I10214'])/10
-
-            if('D11183' in status):
-                self._filter_change = int(status['D11183'])
-            else:
-                self._filter_change = -1
-
-            if('D10207' in status):
-                self._defrost = int(status['D10207'])
-            else:
-                self._defrost = -1
-
-            if('I11600' in status):
-                self._sup_req = int(status['I11600'])
-            else:
-                self._sup_req = -1
-
-            if('I11602' in status):
-                self._sup_act_flow = int(status['I11602'])
-            else:
-                self._sup_act_flow = -1
-
-            if('H10200' in status):
-                self._sup_fan_voltage = float(status['H10200'])/1000
-            else:
-                self._sup_fan_voltage = -1.0
-
-            if('I11601' in status):
-                self._eta_req = int(status['I11601'])
-            else:
-                self._eta_req = -1
-
-            if('I11603' in status):
-                self._eta_act_flow = int(status['I11603'])
-            else:
-                self._eta_act_flow = -1
-
-            if('H10201' in status):
-                self._eta_fan_voltage = float(status['H10201'])/1000
-            else:
-                self._eta_fan_voltage = -1.0
-
-            if('I11604' in status):
-                self._oda_req = int(status['I11604'])
-            else:
-                self._oda_req = -1
-
-            if('I11605' in status):
-                self._oda_act_flow = int(status['I11605'])
-            else:
-                self._oda_act_flow = -1
-
-            if('H10204' in status):
-                self._sc_voltage = float(status['H10204'])/1000
-            else:
-                self._sc_voltage = -1.0
 
             program = self.atrea.getProgram()
             if program == AtreaProgram.MANUAL:
@@ -684,18 +619,11 @@ class AtreaDevice(ClimateEntity):
     async def async_set_swing_mode(self, swing_mode):
         """Set new target swing operation."""
         LOGGER.debug("Setting swing mode to %s", str(swing_mode))
-
-        if (swing_mode == SWING_VERTICAL):
-            zone = 0
-        elif (swing_mode == SWING_HORIZONTAL):
-            zone = 1
-        elif (swing_mode == SWING_BOTH):
-            zone = 2
-        else:
+        if not self._is_swing_mode_enabled() or swing_mode not in self._swing_labels:
             LOGGER.warn(
                 "Zone setting (%s) is not supported.", str(swing_mode))
             return
-
+        zone = self._swing_labels.index(swing_mode)
         LOGGER.debug("Setting zone to %s", zone)
         self.updatePending = True
         try:

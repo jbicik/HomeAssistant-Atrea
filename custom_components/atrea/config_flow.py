@@ -5,12 +5,22 @@ from .utils import isAtreaUnit, processFanModes
 import voluptuous as vol
 from .const import (
     CONF_FAN_MODES,
+    CONF_CO2_FORMULA,
+    DEFAULT_CO2_FORMULA,
+    CONF_SWING_MODE_POLICY,
+    DEFAULT_SWING_MODE_POLICY,
+    SWING_MODE_POLICIES,
+    CONF_SWING_LABEL_ZONE_1,
+    CONF_SWING_LABEL_ZONE_2,
+    CONF_SWING_LABEL_BOTH_ZONES,
+    DEFAULT_SWING_LABELS,
     DOMAIN,
     LOGGER,
     CONF_PRESETS,
     ALL_PRESET_LIST,
     DEFAULT_FAN_MODE_LIST,
 )
+from .utils import validate_co2_formula
 from pyatrea import Atrea
 
 
@@ -188,6 +198,25 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
             LOGGER.debug("Incorrect fan modes: " + e)
             # pass
 
+        co2_formula = self.config_entry.options.get(
+            CONF_CO2_FORMULA,
+            self.config_entry.data.get(CONF_CO2_FORMULA, DEFAULT_CO2_FORMULA),
+        )
+        swing_mode_policy = self.config_entry.options.get(
+            CONF_SWING_MODE_POLICY, DEFAULT_SWING_MODE_POLICY
+        )
+        swing_labels = (
+            self.config_entry.options.get(
+                CONF_SWING_LABEL_ZONE_1, DEFAULT_SWING_LABELS[0]
+            ),
+            self.config_entry.options.get(
+                CONF_SWING_LABEL_ZONE_2, DEFAULT_SWING_LABELS[1]
+            ),
+            self.config_entry.options.get(
+                CONF_SWING_LABEL_BOTH_ZONES, DEFAULT_SWING_LABELS[2]
+            ),
+        )
+
         LOGGER.debug(
             "[%s] Opened Atrea options.", self.config_entry.data[CONF_IP_ADDRESS]
         )
@@ -207,6 +236,32 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                 LOGGER.debug("Loading fan_modes...")
                 if CONF_FAN_MODES in user_input:
                     fan_modes = user_input[CONF_FAN_MODES]
+
+                co2_formula = user_input.get(CONF_CO2_FORMULA, co2_formula).strip()
+                if not validate_co2_formula(co2_formula):
+                    raise Exception("Invalid CO2 formula")
+
+                swing_mode_policy = user_input.get(
+                    CONF_SWING_MODE_POLICY, swing_mode_policy
+                )
+                swing_labels = (
+                    user_input.get(CONF_SWING_LABEL_ZONE_1, swing_labels[0]).strip(),
+                    user_input.get(CONF_SWING_LABEL_ZONE_2, swing_labels[1]).strip(),
+                    user_input.get(
+                        CONF_SWING_LABEL_BOTH_ZONES, swing_labels[2]
+                    ).strip(),
+                )
+                if (
+                    swing_mode_policy not in SWING_MODE_POLICIES
+                    or (
+                        swing_mode_policy != "disabled"
+                        and (
+                            any(not label for label in swing_labels)
+                            or len(set(swing_labels)) != len(swing_labels)
+                        )
+                    )
+                ):
+                    raise Exception("Invalid swing mode configuration")
 
                 LOGGER.debug("Verifying format of fan modes...")
                 if not processFanModes(fan_modes):
@@ -238,7 +293,13 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=data,
                 )
-                return self.async_create_entry(title="", data=None)
+                options = dict(self.config_entry.options)
+                options[CONF_CO2_FORMULA] = co2_formula
+                options[CONF_SWING_MODE_POLICY] = swing_mode_policy
+                options[CONF_SWING_LABEL_ZONE_1] = swing_labels[0]
+                options[CONF_SWING_LABEL_ZONE_2] = swing_labels[1]
+                options[CONF_SWING_LABEL_BOTH_ZONES] = swing_labels[2]
+                return self.async_create_entry(title="", data=options)
             except Exception as e:
                 LOGGER.debug(e)
                 if "Failed to establish a new connection" in str(e):
@@ -247,6 +308,10 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                     errors["base"] = "invalid_auth"
                 elif str(e) == "Invalid fan mode format":
                     errors["base"] = "invalid_fan_mode"
+                elif str(e) == "Invalid CO2 formula":
+                    errors["base"] = "invalid_co2_formula"
+                elif str(e) == "Invalid swing mode configuration":
+                    errors["base"] = "invalid_swing_configuration"
                 else:
                     errors["base"] = "unknown"
                     LOGGER.error(e)
@@ -257,6 +322,25 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(CONF_NAME, description={"suggested_value": name}): str,
             vol.Optional(
                 CONF_FAN_MODES, description={"suggested_value": fan_modes}
+            ): str,
+            vol.Optional(CONF_CO2_FORMULA, default=co2_formula): str,
+            vol.Optional(
+                CONF_SWING_MODE_POLICY, default=swing_mode_policy
+            ): vol.In(
+                {
+                    "auto": "Auto (detect from H10511)",
+                    "enabled": "Enabled",
+                    "disabled": "Disabled",
+                }
+            ),
+            vol.Optional(
+                CONF_SWING_LABEL_ZONE_1, default=swing_labels[0]
+            ): str,
+            vol.Optional(
+                CONF_SWING_LABEL_ZONE_2, default=swing_labels[1]
+            ): str,
+            vol.Optional(
+                CONF_SWING_LABEL_BOTH_ZONES, default=swing_labels[2]
             ): str,
         }
 

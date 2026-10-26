@@ -17,6 +17,7 @@ BINARY_SENSOR_REGISTERS = {
     "D10202": ("D3 input", "mdi:electric-switch"),
     "D10203": ("D4 input", "mdi:electric-switch"),
     "D10207": ("Heat pump defrost", "mdi:snowflake-melt"),
+    "D11183": ("Filter change required", "mdi:air-filter"),
 }
 
 

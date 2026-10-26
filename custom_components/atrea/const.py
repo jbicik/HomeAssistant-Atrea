@@ -4,9 +4,6 @@ from datetime import timedelta
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
-    SWING_VERTICAL,
-    SWING_HORIZONTAL,
-    SWING_BOTH,
 )
 from pyatrea import AtreaMode
 
@@ -20,13 +17,21 @@ SUPPORT_FLAGS = (
     | ClimateEntityFeature.PRESET_MODE
     | ClimateEntityFeature.TURN_OFF
     | ClimateEntityFeature.TURN_ON
-    | ClimateEntityFeature.SWING_MODE
 )
 DEFAULT_NAME = "Atrea"
 STATE_MANUAL = "manual"
 STATE_UNKNOWN = "unknown"
 CONF_FAN_MODES = "fan_modes"
 CONF_PRESETS = "presets"
+CONF_CO2_FORMULA = "co2_formula"
+DEFAULT_CO2_FORMULA = "round(x * 200)"
+CONF_SWING_MODE_POLICY = "swing_mode_policy"
+DEFAULT_SWING_MODE_POLICY = "auto"
+SWING_MODE_POLICIES = ("auto", "enabled", "disabled")
+CONF_SWING_LABEL_ZONE_1 = "swing_label_zone_1"
+CONF_SWING_LABEL_ZONE_2 = "swing_label_zone_2"
+CONF_SWING_LABEL_BOTH_ZONES = "swing_label_both_zones"
+DEFAULT_SWING_LABELS = ("SZ1", "SZ2", "SZ1 + SZ2")
 DEFAULT_FAN_MODE_LIST = "12,20,30,40,50,60,70,80,90,100"
 ALL_PRESET_LIST = [
     "Off",
@@ -74,5 +79,3 @@ ICONS = {
 }
 
 HVAC_MODES = [HVACMode.OFF, HVACMode.AUTO, HVACMode.FAN_ONLY]
-# SWING_VERTICAL = Zone 0, SWING_HORIZONTAL = Zone 1, SWING_BOTH = Zone 2
-SWING_MODES = [SWING_VERTICAL, SWING_HORIZONTAL, SWING_BOTH]
