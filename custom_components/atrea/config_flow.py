@@ -5,6 +5,10 @@ from .utils import isAtreaUnit, processFanModes
 import voluptuous as vol
 from .const import (
     CONF_FAN_MODES,
+    CONF_POWER_CONTROL_MODE,
+    POWER_CONTROL_PERCENT,
+    POWER_CONTROL_PRESET,
+    POWER_CONTROL_MODES,
     CONF_CO2_FORMULA,
     DEFAULT_CO2_FORMULA,
     CONF_SWING_MODE_POLICY,
@@ -205,6 +209,9 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
         swing_mode_policy = self.config_entry.options.get(
             CONF_SWING_MODE_POLICY, DEFAULT_SWING_MODE_POLICY
         )
+        power_control_mode = self.config_entry.options.get(
+            CONF_POWER_CONTROL_MODE, POWER_CONTROL_PERCENT
+        )
         swing_labels = (
             self.config_entry.options.get(
                 CONF_SWING_LABEL_ZONE_1, DEFAULT_SWING_LABELS[0]
@@ -236,6 +243,12 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                 LOGGER.debug("Loading fan_modes...")
                 if CONF_FAN_MODES in user_input:
                     fan_modes = user_input[CONF_FAN_MODES]
+
+                power_control_mode = user_input.get(
+                    CONF_POWER_CONTROL_MODE, power_control_mode
+                )
+                if power_control_mode not in POWER_CONTROL_MODES:
+                    raise Exception("Invalid power control mode")
 
                 co2_formula = user_input.get(CONF_CO2_FORMULA, co2_formula).strip()
                 if not validate_co2_formula(co2_formula):
@@ -294,6 +307,7 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                     self.config_entry, data=data,
                 )
                 options = dict(self.config_entry.options)
+                options[CONF_POWER_CONTROL_MODE] = power_control_mode
                 options[CONF_CO2_FORMULA] = co2_formula
                 options[CONF_SWING_MODE_POLICY] = swing_mode_policy
                 options[CONF_SWING_LABEL_ZONE_1] = swing_labels[0]
@@ -312,6 +326,8 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
                     errors["base"] = "invalid_co2_formula"
                 elif str(e) == "Invalid swing mode configuration":
                     errors["base"] = "invalid_swing_configuration"
+                elif str(e) == "Invalid power control mode":
+                    errors["base"] = "invalid_power_control_mode"
                 else:
                     errors["base"] = "unknown"
                     LOGGER.error(e)
@@ -323,6 +339,14 @@ class AtreaOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_FAN_MODES, description={"suggested_value": fan_modes}
             ): str,
+            vol.Optional(
+                CONF_POWER_CONTROL_MODE, default=power_control_mode
+            ): vol.In(
+                {
+                    POWER_CONTROL_PERCENT: "Percentage fan speeds",
+                    POWER_CONTROL_PRESET: "Preset power levels (R_5 constant flow)",
+                }
+            ),
             vol.Optional(CONF_CO2_FORMULA, default=co2_formula): str,
             vol.Optional(
                 CONF_SWING_MODE_POLICY, default=swing_mode_policy

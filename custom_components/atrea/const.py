@@ -22,6 +22,22 @@ DEFAULT_NAME = "Atrea"
 STATE_MANUAL = "manual"
 STATE_UNKNOWN = "unknown"
 CONF_FAN_MODES = "fan_modes"
+CONF_POWER_CONTROL_MODE = "power_control_mode"
+POWER_CONTROL_PERCENT = "percent"
+POWER_CONTROL_PRESET = "preset"
+POWER_CONTROL_MODES = (POWER_CONTROL_PERCENT, POWER_CONTROL_PRESET)
+PRESET_POWER_CODES = {
+    "Off": 0,
+    "Min/Min": 30,
+    "Min/Norm": 31,
+    "Min/Max": 32,
+    "Norm/Min": 33,
+    "Norm/Norm": 34,
+    "Norm/Max": 35,
+    "Max/Min": 36,
+    "Max/Norm": 37,
+    "Max/Max": 38,
+}
 CONF_PRESETS = "presets"
 CONF_CO2_FORMULA = "co2_formula"
 DEFAULT_CO2_FORMULA = "round(x * 200)"

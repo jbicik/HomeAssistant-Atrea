@@ -63,7 +63,8 @@
           "D2": "D2",
           "D3": "D3",
           "D4": "D4",
-          "fan_modes": "Fan modes"
+          "fan_modes": "Fan modes",
+          "power_control_mode": "Power control mode"
         },
         "description": "Modify settings of your Atrea unit. CO₂ formula examples: x * 200 or max(0, (x - 0.5) * 500). Supported operators: +, -, *, /, **. Supported functions: abs, min, max, round. Swing modes are detected from H10511 in Auto mode; customize their displayed labels below."
       }
@@ -74,7 +75,8 @@
       "not_atrea_unit": "Discovered device is not a supported Atrea unit",
       "invalid_fan_mode": "Invalid fan mode format, use only comma and numbers between 12 and 100.",
       "invalid_co2_formula": "Invalid CO₂ formula. Use x for the IN1 voltage in volts and a supported arithmetic expression.",
-      "invalid_swing_configuration": "Choose a valid swing mode policy and enter three unique, non-empty labels when swing modes are enabled."
+      "invalid_swing_configuration": "Choose a valid swing mode policy and enter three unique, non-empty labels when swing modes are enabled.",
+      "invalid_power_control_mode": "Choose percentage fan speeds or preset power levels."
     }
   }
 }

@@ -8,6 +8,8 @@ from .const import (
     CONF_PRESETS,
     ALL_PRESET_LIST,
     CONF_FAN_MODES,
+    CONF_POWER_CONTROL_MODE,
+    POWER_CONTROL_PERCENT,
     DEFAULT_FAN_MODE_LIST,
 )
 from homeassistant.const import CONF_NAME
@@ -161,5 +163,8 @@ async def update_listener(hass, entry):
         sensor_name = "atrea"
     hass.data[DOMAIN][entry.entry_id]["climate"].updatePresetList(preset_list)
     hass.data[DOMAIN][entry.entry_id]["climate"].updateFanList(fan_list)
+    hass.data[DOMAIN][entry.entry_id]["climate"].updatePowerControlMode(
+        entry.options.get(CONF_POWER_CONTROL_MODE, POWER_CONTROL_PERCENT)
+    )
     hass.data[DOMAIN][entry.entry_id]["climate"].updateName(sensor_name)
     hass.data[DOMAIN][entry.entry_id]["update"].updateName(sensor_name)

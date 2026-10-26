@@ -38,6 +38,10 @@ from .const import (
     SUPPORT_FLAGS,
     STATE_UNKNOWN,
     CONF_FAN_MODES,
+    CONF_POWER_CONTROL_MODE,
+    POWER_CONTROL_PERCENT,
+    POWER_CONTROL_PRESET,
+    PRESET_POWER_CODES,
     CONF_PRESETS,
     DEFAULT_FAN_MODE_LIST,
     ALL_PRESET_LIST,
@@ -92,6 +96,9 @@ class AtreaDevice(ClimateEntity):
         self._warnings = []
         self._name = sensor_name
         self._current_fan_mode = None
+        self._power_control_mode = entry.options.get(
+            CONF_POWER_CONTROL_MODE, POWER_CONTROL_PERCENT
+        )
         self._alerts = []
         self._outside_temp = 0.0
         self._inside_temp = 0.0
@@ -141,6 +148,11 @@ class AtreaDevice(ClimateEntity):
 
     def updateFanList(self, fan_list, updateState=True):
         self._fan_list = processFanModes(fan_list)
+        if updateState:
+            self.async_schedule_update_ha_state(True)
+
+    def updatePowerControlMode(self, mode, updateState=True):
+        self._power_control_mode = mode
         if updateState:
             self.async_schedule_update_ha_state(True)
 
@@ -313,7 +325,15 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def fan_modes(self):
+        if self._power_control_mode == POWER_CONTROL_PRESET and self._supports_preset_power():
+            return list(PRESET_POWER_CODES)
         return self._fan_list
+
+    def _supports_preset_power(self):
+        try:
+            return int((self.data.get("status") or {}).get("H10510", -1)) == 4
+        except (TypeError, ValueError):
+            return False
 
     @property
     def program(self):
@@ -395,7 +415,29 @@ class AtreaDevice(ClimateEntity):
             elif "H01005" in status:
                 self._requested_power = int(self.atrea.getValue("H01005"))
 
-            if "H01001" in status:
+            preset_power = (
+                self._power_control_mode == POWER_CONTROL_PRESET
+                and self._supports_preset_power()
+            )
+            if preset_power:
+                # Show the selected/requested code. H10704 is the effective
+                # code and may differ from the selection made on the unit.
+                if str(status.get("H10700")) == "0":
+                    requested_code = status.get("H10708")
+                else:
+                    requested_code = status.get("H10714")
+                if requested_code is None:
+                    requested_code = status.get("H10704")
+            else:
+                requested_code = None
+
+            if preset_power and requested_code is not None:
+                power_code = int(requested_code)
+                self._current_fan_mode = next(
+                    (name for name, code in PRESET_POWER_CODES.items() if code == power_code),
+                    str(power_code),
+                )
+            elif "H01001" in status:
                 self._current_fan_mode = str(int(self.atrea.getValue("H01001"))) + "%"
             else:
                 self._current_fan_mode = str(self._requested_power) + "%"
@@ -463,7 +505,7 @@ class AtreaDevice(ClimateEntity):
             else:
                 self.air_handling_control = "Unknown (" + str(program) + ")"
 
-            if self._current_fan_mode == "0%":
+            if self._current_fan_mode in ("0%", "Off"):
                 self._current_hvac_mode = HVACMode.OFF
 
             # todo fix warning not translated
@@ -482,12 +524,30 @@ class AtreaDevice(ClimateEntity):
             self.async_schedule_update_ha_state(True)
 
     async def async_set_fan_mode(self, fan_mode):
-        fan_percent = int(re.sub("[^0-9]", "", fan_mode))
-        if fan_percent < 12:
-            fan_percent = 12
-        if fan_percent > 100:
-            fan_percent = 100
-        if fan_percent >= 12 and fan_percent <= 100:
+        preset_power = (
+            self._power_control_mode == POWER_CONTROL_PRESET
+            and self._supports_preset_power()
+        )
+        if preset_power:
+            if fan_mode not in PRESET_POWER_CODES:
+                LOGGER.warning("Unsupported preset power: %s", fan_mode)
+                return
+            program = await self.hass.async_add_executor_job(self.atrea.getProgram)
+            if program == AtreaProgram.WEEKLY:
+                self.atrea.setProgram(AtreaProgram.TEMPORARY)
+                power_register = "H10714"
+            elif program == AtreaProgram.TEMPORARY:
+                power_register = "H10714"
+            else:
+                power_register = "H10708"
+            self.atrea.setCommand(power_register, PRESET_POWER_CODES[fan_mode])
+        else:
+            try:
+                fan_percent = int(re.sub("[^0-9]", "", fan_mode))
+            except (TypeError, ValueError):
+                LOGGER.warning("Invalid percentage fan mode: %s", fan_mode)
+                return
+            fan_percent = min(100, max(12, fan_percent))
             if (
                 await self.hass.async_add_executor_job(self.atrea.getProgram)
                 == AtreaProgram.WEEKLY
@@ -495,14 +555,12 @@ class AtreaDevice(ClimateEntity):
                 self.atrea.setProgram(AtreaProgram.TEMPORARY)
             self.atrea.setPower(fan_percent)
 
-            self.updatePending = True
-            await self.hass.async_add_executor_job(self.atrea.exec)
-            await self._coordinator.async_request_refresh()
-            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-            self.updatePending = False
-            self.manualUpdate()
-        else:
-            LOGGER.warn("Power out of range (12,100)")
+        self.updatePending = True
+        await self.hass.async_add_executor_job(self.atrea.exec)
+        await self._coordinator.async_request_refresh()
+        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
+        self.updatePending = False
+        self.manualUpdate()
 
     async def async_turn_on(self):
         if self.air_handling_control == "Manual":

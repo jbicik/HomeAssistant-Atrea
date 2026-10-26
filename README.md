@@ -36,6 +36,13 @@ heat-pump defrost state when their registers are available. Airflow values are
 only meaningful in constant-flow operation; ODA airflow applies to supported
 R5 units.
 
+Fan power control can be configured as percentage speeds or as preset levels.
+Preset control is available when the unit reports `H10510 = 4` (R_5 constant
+flow) and offers Off plus the Min/Norm/Max supply/extract combinations. Units
+without that capability continue to expose the configured percentage speeds.
+Preset values are read from `H10704`; selections are written to `H10708` in
+manual control or `H10714` in temporary control.
+
 Outdoor, averaged outdoor, supply, extract, exhaust, and indoor air
 temperatures are available as native sensors. D1–D4 inputs are exposed as
 binary sensors.
