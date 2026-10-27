@@ -28,16 +28,30 @@ POWER_CONTROL_PRESET = "preset"
 POWER_CONTROL_MODES = (POWER_CONTROL_PERCENT, POWER_CONTROL_PRESET)
 PRESET_POWER_CODES = {
     "Off": 0,
-    "Min/Min": 30,
-    "Min/Norm": 31,
-    "Min/Max": 32,
-    "Norm/Min": 33,
-    "Norm/Norm": 34,
-    "Norm/Max": 35,
-    "Max/Min": 36,
-    "Max/Norm": 37,
-    "Max/Max": 38,
+    "Ventilation - Min": 10,
+    "Ventilation - Norm": 11,
+    "Ventilation - Max": 12,
+    "Circulation - Min": 20,
+    "Circulation - Norm": 21,
+    "Circulation - Max": 22,
+    "Circulation Min / Ventilation Min": 30,
+    "Circulation Min / Ventilation Norm": 31,
+    "Circulation Min / Ventilation Max": 32,
+    "Circulation Norm / Ventilation Min": 33,
+    "Circulation Norm / Ventilation Norm": 34,
+    "Circulation Norm / Ventilation Max": 35,
+    "Circulation Max / Ventilation Min": 36,
+    "Circulation Max / Ventilation Norm": 37,
+    "Circulation Max / Ventilation Max": 38,
 }
+# Match the controller's mode2Z() rules, using the requested operating mode.
+PRESET_POWER_CODES_BY_MODE = {mode: (0, 10, 11, 12) for mode in AtreaMode}
+PRESET_POWER_CODES_BY_MODE.update({
+    AtreaMode.OFF: (0,),
+    AtreaMode.AUTOMATIC: (0, 30, 31, 32, 33, 34, 35, 36, 37, 38),
+    AtreaMode.CIRCULATION: (0, 20, 21, 22),
+    AtreaMode.CIRCULATION_AND_VENTILATION: (0, 30, 31, 32, 33, 34, 35, 36, 37, 38),
+})
 CONF_PRESETS = "presets"
 CONF_CO2_FORMULA = "co2_formula"
 DEFAULT_CO2_FORMULA = "round(x * 200)"

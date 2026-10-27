@@ -38,10 +38,22 @@ R5 units.
 
 Fan power control can be configured as percentage speeds or as preset levels.
 Preset control is available when the unit reports `H10510 = 4` (R_5 constant
-flow) and offers Off plus the Min/Norm/Max supply/extract combinations. Units
-without that capability continue to expose the configured percentage speeds.
-Preset values are read from `H10704`; selections are written to `H10708` in
-manual control or `H10714` in temporary control.
+flow). It offers Off, Min/Norm/Max levels for ventilation (codes 10–12),
+Min/Norm/Max levels for circulation (20–22), and paired circulation/ventilation
+levels (30–38). Paired labels list circulation first and ventilation second.
+The fan-mode dropdown follows the controller's requested operating preset:
+Ventilation, Night precooling, Disbalance and Overpressure use ventilation levels;
+Circulation uses circulation levels; Automatic and Circulation and Ventilation
+use paired levels. Off is included in each list. The Off preset offers only Off.
+Changing presets preserves the matching Min/Norm/Max level and updates the
+power request when it belongs to a different family.
+Units without that capability continue to expose the configured percentage
+speeds.
+Requested power is read from `H10714`, with effective power in `H10704`.
+If an old request belongs to another preset, the dropdown displays the matching
+effective level (or converts the request to the current family). Both raw codes
+remain available for diagnostics. Power commands always write `H10708`, including
+Temporary operation. Only the schedule flag for a changed parameter is overridden.
 
 Outdoor, averaged outdoor, supply, extract, exhaust, and indoor air
 temperatures are available as native sensors. D1–D4 inputs are exposed as

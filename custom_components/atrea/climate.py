@@ -27,6 +27,7 @@ from homeassistant.const import (
 )
 from homeassistant.util import Throttle
 from homeassistant.helpers import device_registry as dr
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from typing import Callable
 from pyatrea import AtreaProgram, AtreaMode
 
@@ -42,6 +43,7 @@ from .const import (
     POWER_CONTROL_PERCENT,
     POWER_CONTROL_PRESET,
     PRESET_POWER_CODES,
+    PRESET_POWER_CODES_BY_MODE,
     CONF_PRESETS,
     DEFAULT_FAN_MODE_LIST,
     ALL_PRESET_LIST,
@@ -326,8 +328,98 @@ class AtreaDevice(ClimateEntity):
     @property
     def fan_modes(self):
         if self._power_control_mode == POWER_CONTROL_PRESET and self._supports_preset_power():
+            valid_codes = PRESET_POWER_CODES_BY_MODE.get(self._current_preset)
+            if valid_codes is not None:
+                return [
+                    name
+                    for name, code in PRESET_POWER_CODES.items()
+                    if code in valid_codes
+                ]
             return list(PRESET_POWER_CODES)
         return self._fan_list
+
+    @staticmethod
+    def _matching_preset_power_code(power_code, mode):
+        """Keep the selected min/norm/max level valid when its preset changes."""
+        if mode not in PRESET_POWER_CODES_BY_MODE or power_code not in PRESET_POWER_CODES.values():
+            return None
+        if power_code == 0 or mode == AtreaMode.OFF:
+            return 0
+        if 30 <= power_code <= 38:
+            circulation, ventilation = divmod(power_code - 30, 3)
+        else:
+            circulation = ventilation = power_code % 10
+        if mode == AtreaMode.CIRCULATION:
+            return 20 + circulation
+        if mode in (AtreaMode.AUTOMATIC, AtreaMode.CIRCULATION_AND_VENTILATION):
+            return 30 + circulation * 3 + ventilation
+        return 10 + ventilation
+
+    @staticmethod
+    def _power_code(status, register):
+        try:
+            return int(status.get(register))
+        except (TypeError, ValueError):
+            return None
+
+    def _uses_preset_power(self):
+        return self._power_control_mode == POWER_CONTROL_PRESET and self._supports_preset_power()
+
+    def _selected_power_code(self, status):
+        """Report a selectable level while preserving raw power diagnostics."""
+        requested = self._power_code(status, "H10714")
+        effective = self._power_code(status, "H10704")
+        valid = PRESET_POWER_CODES_BY_MODE.get(self._current_preset, ())
+        if requested in valid:
+            return requested
+        if effective in valid:
+            return effective
+        return self._matching_preset_power_code(
+            requested if requested is not None else effective, self._current_preset
+        )
+
+    def _queue_temporary_override(self, register):
+        """Override only the scheduled parameter being changed, as the unit UI does."""
+        pending = self.atrea.commands.get(register)
+        control = int(pending) if pending is not None else self._power_code(
+            self.data.get("status") or {}, register
+        )
+        if control == 1:
+            self.atrea.setCommand(register, 2)
+
+    def _queue_matching_power(self, mode):
+        if not self._uses_preset_power():
+            return None
+        status = self.data.get("status") or {}
+        requested = self._power_code(status, "H10714")
+        if requested is None:
+            requested = self._power_code(status, "H10704")
+        matching = self._matching_preset_power_code(requested, mode)
+        if matching is not None and matching != requested:
+            self._queue_temporary_override("H10700")
+            self.atrea.setCommand("H10708", matching)
+            return matching
+        return None
+
+    async def _async_execute_control(self, expected_power=None):
+        """Execute one command batch, refresh state and discard the queued commands."""
+        self.updatePending = True
+        try:
+            if not await self.hass.async_add_executor_job(self.atrea.exec):
+                raise HomeAssistantError("The Atrea unit did not accept the control command.")
+            await self._coordinator.async_request_refresh()
+            if not self.data.get("status"):
+                raise HomeAssistantError("Unable to read Atrea state after the control command.")
+            self.manualUpdate()
+            reported = self._power_code(self.data.get("status") or {}, "H10714")
+            if expected_power is not None and reported is not None and reported != expected_power:
+                raise HomeAssistantError(
+                    f"The Atrea unit still reports requested power {reported}; "
+                    f"expected {expected_power}."
+                )
+        finally:
+            self.atrea.commands.clear()
+            self.updatePending = False
 
     def _supports_preset_power(self):
         try:
@@ -410,32 +502,24 @@ class AtreaDevice(ClimateEntity):
             elif "H01006" in status:
                 self._requested_temp = self.atrea.getValue("H01006")
 
+            # H10715 is the requested mode, which determines the selectable power
+            # family even when the effective mode is overridden by the unit.
+            try:
+                self._current_preset = AtreaMode(int(status["H10715"]))
+            except (KeyError, TypeError, ValueError):
+                self._current_preset = self.atrea.getMode()
+
             if "H10714" in status:
                 self._requested_power = int(status["H10714"])
             elif "H01005" in status:
                 self._requested_power = int(self.atrea.getValue("H01005"))
 
-            preset_power = (
-                self._power_control_mode == POWER_CONTROL_PRESET
-                and self._supports_preset_power()
-            )
+            preset_power = self._uses_preset_power()
             if preset_power:
-                # Show the selected/requested code. H10704 is the effective
-                # code and may differ from the selection made on the unit.
-                if str(status.get("H10700")) == "0":
-                    requested_code = status.get("H10708")
-                else:
-                    requested_code = status.get("H10714")
-                if requested_code is None:
-                    requested_code = status.get("H10704")
-            else:
-                requested_code = None
-
-            if preset_power and requested_code is not None:
-                power_code = int(requested_code)
+                power_code = self._selected_power_code(status)
                 self._current_fan_mode = next(
                     (name for name, code in PRESET_POWER_CODES.items() if code == power_code),
-                    str(power_code),
+                    None,
                 )
             elif "H01001" in status:
                 self._current_fan_mode = str(int(self.atrea.getValue("H01001"))) + "%"
@@ -482,11 +566,12 @@ class AtreaDevice(ClimateEntity):
             if "H10704" in status:
                 self._current_power = int(status["H10704"])
 
-            self._current_preset = self.atrea.getMode()
             if self._current_preset == AtreaMode.OFF:
                 self._current_hvac_mode = HVACMode.OFF
 
             program = self.atrea.getProgram()
+            if any(self._power_code(status, f"H1070{i}") == 2 for i in range(4)):
+                program = AtreaProgram.TEMPORARY
             if program == AtreaProgram.MANUAL:
                 self.air_handling_control = "Manual"
                 if self.atrea.getValue("H10705") == 0:
@@ -524,23 +609,18 @@ class AtreaDevice(ClimateEntity):
             self.async_schedule_update_ha_state(True)
 
     async def async_set_fan_mode(self, fan_mode):
-        preset_power = (
-            self._power_control_mode == POWER_CONTROL_PRESET
-            and self._supports_preset_power()
-        )
+        preset_power = self._uses_preset_power()
+        expected_power = None
         if preset_power:
-            if fan_mode not in PRESET_POWER_CODES:
-                LOGGER.warning("Unsupported preset power: %s", fan_mode)
-                return
-            program = await self.hass.async_add_executor_job(self.atrea.getProgram)
-            if program == AtreaProgram.WEEKLY:
-                self.atrea.setProgram(AtreaProgram.TEMPORARY)
-                power_register = "H10714"
-            elif program == AtreaProgram.TEMPORARY:
-                power_register = "H10714"
-            else:
-                power_register = "H10708"
-            self.atrea.setCommand(power_register, PRESET_POWER_CODES[fan_mode])
+            if fan_mode not in self.fan_modes:
+                raise ServiceValidationError(
+                    f"Power mode {fan_mode!r} is not available for {self.preset_mode}."
+                )
+            self.atrea.commands.clear()
+            self._queue_temporary_override("H10700")
+            expected_power = PRESET_POWER_CODES[fan_mode]
+            # H10714 is readback; the web control API always writes H10708.
+            self.atrea.setCommand("H10708", expected_power)
         else:
             try:
                 fan_percent = int(re.sub("[^0-9]", "", fan_mode))
@@ -548,6 +628,7 @@ class AtreaDevice(ClimateEntity):
                 LOGGER.warning("Invalid percentage fan mode: %s", fan_mode)
                 return
             fan_percent = min(100, max(12, fan_percent))
+            self.atrea.commands.clear()
             if (
                 await self.hass.async_add_executor_job(self.atrea.getProgram)
                 == AtreaProgram.WEEKLY
@@ -555,14 +636,10 @@ class AtreaDevice(ClimateEntity):
                 self.atrea.setProgram(AtreaProgram.TEMPORARY)
             self.atrea.setPower(fan_percent)
 
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.updatePending = False
-        self.manualUpdate()
+        await self._async_execute_control(expected_power)
 
     async def async_turn_on(self):
+        self.atrea.commands.clear()
         if self.air_handling_control == "Manual":
             self.atrea.setProgram(AtreaProgram.MANUAL)
             self._current_hvac_mode = HVACMode.FAN_ONLY
@@ -572,16 +649,14 @@ class AtreaDevice(ClimateEntity):
         elif self.air_handling_control == "Temporary":
             self.atrea.setProgram(AtreaProgram.TEMPORARY)
             self._current_hvac_mode = HVACMode.FAN_ONLY
+        if self._uses_preset_power():
+            self._queue_temporary_override("H10701")
         self.atrea.setMode(AtreaMode.VENTILATION)
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        expected_power = self._queue_matching_power(AtreaMode.VENTILATION)
+        await self._async_execute_control(expected_power)
 
     async def async_turn_off(self):
+        self.atrea.commands.clear()
         if self.air_handling_control == "Manual":
             self.atrea.setProgram(AtreaProgram.MANUAL)
         elif self.air_handling_control == "Temporary":
@@ -590,14 +665,11 @@ class AtreaDevice(ClimateEntity):
             self.atrea.setProgram(AtreaProgram.WEEKLY)
 
         self._current_hvac_mode = HVACMode.OFF
+        if self._uses_preset_power():
+            self._queue_temporary_override("H10701")
         self.atrea.setMode(AtreaMode.OFF)
 
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        await self._async_execute_control()
 
     async def async_set_hvac_mode(self, hvac_mode):
         mode = None
@@ -611,24 +683,20 @@ class AtreaDevice(ClimateEntity):
             self._current_hvac_mode = HVACMode.FAN_ONLY
         elif hvac_mode == HVACMode.OFF:
             await self.async_turn_off()
-            self._current_hvac_mode = HVACMode.OFF
+            return
+
+        self.atrea.commands.clear()
 
         if program != None and program != await self.hass.async_add_executor_job(
             self.atrea.getProgram
         ):
             self.atrea.setProgram(program)
 
-        if (
-            mode != None and self._current_preset != mode
-        ) or self.air_handling_control == "Schedule":
+        if mode is not None and self._current_preset != mode:
             self.atrea.setMode(mode)
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        expected_power = self._queue_matching_power(mode) if mode is not None else None
+        if self.atrea.commands:
+            await self._async_execute_control(expected_power)
 
     async def async_set_preset_mode(self, preset_mode):
         mode = None
@@ -640,20 +708,22 @@ class AtreaDevice(ClimateEntity):
 
         if mode == AtreaMode.OFF:
             await self.async_turn_off()
-        if (
-            await self.hass.async_add_executor_job(self.atrea.getProgram)
-            == AtreaProgram.WEEKLY
-        ):
-            self.atrea.setProgram(AtreaProgram.TEMPORARY)
-        if mode != await self.hass.async_add_executor_job(self.atrea.getMode):
-            self.atrea.setMode(mode)
+            return
 
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_request_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        if preset_mode not in self.preset_modes:
+            raise ServiceValidationError(f"Preset {preset_mode!r} is not available.")
+
+        self.atrea.commands.clear()
+        if self._uses_preset_power():
+            self._queue_temporary_override("H10701")
+        elif await self.hass.async_add_executor_job(self.atrea.getProgram) == AtreaProgram.WEEKLY:
+            self.atrea.setProgram(AtreaProgram.TEMPORARY)
+
+        if mode != self._current_preset:
+            self.atrea.setMode(mode)
+        expected_power = self._queue_matching_power(mode)
+        if self.atrea.commands:
+            await self._async_execute_control(expected_power)
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
