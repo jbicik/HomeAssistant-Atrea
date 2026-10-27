@@ -55,6 +55,15 @@ effective level (or converts the request to the current family). Both raw codes
 remain available for diagnostics. Power commands always write `H10708`, including
 Temporary operation. Only the schedule flag for a changed parameter is overridden.
 
+Changing target temperature during a weekly schedule creates a temporary
+temperature override (`H10702 = 2`) and writes `H10710`. Power, operating preset,
+and zone retain their schedule control. Home Assistant then reports the overall
+program as Temporary, represented by the `fan_only` HVAC status.
+Power, preset and zone changes also override their own scheduled controls.
+Explicitly selecting `fan_only` sets all controls to Manual; selecting Auto
+restores weekly control for all settings. Climate values are published on each
+coordinator update, and control commands await an immediate status read.
+
 Outdoor, averaged outdoor, supply, extract, exhaust, and indoor air
 temperatures are available as native sensors. D1–D4 inputs are exposed as
 binary sensors.

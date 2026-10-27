@@ -1,9 +1,9 @@
-"""Power control regressions using pyatrea and an offline RD5 HTTP transport."""
+"""Climate control regressions using pyatrea and an offline RD5 HTTP transport."""
 
 import re
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 
@@ -20,13 +20,14 @@ def device(program=2, mode=4, requested=33, effective=21):
     status = {
         "H10510": "4", "H10700": str(program), "H10701": str(program),
         "H10702": str(program), "H10703": str(program),
-        "H10704": str(effective), "H10705": str(mode),
+        "H10704": str(effective), "H10705": str(mode), "H10706": "215",
+        "H10511": "1", "H10707": "2",
         "H10714": str(requested), "H10715": str(mode),
         "I00020": "2", "I00021": "3", "I00022": "41",
     }
     atrea.status = status.copy()
     atrea.params = {
-        "ids": [f"H1070{i}" for i in range(10)] + ["H10714", "H10715"],
+        "ids": [f"H1070{i}" for i in range(10)] + ["H10710", "H10711", "H10714", "H10715"],
         "coefs": {}, "offsets": {}, "warning": [], "alert": [],
     }
     atrea.writable_modes = {mode: True for mode in AtreaMode}
@@ -49,8 +50,17 @@ def device(program=2, mode=4, requested=33, effective=21):
             for register in ("H10700", "H10701", "H10702", "H10703"):
                 if register in commands:
                     status[register] = str(commands[register])
+            if commands.get("H10702") == 1:
+                status["H10706"] = "215"  # Weekly schedule target.
             if "H10709" in commands:
                 status["H10715"] = status["H10705"] = str(commands["H10709"])
+            # A scheduled temperature stays active until its control flag is overridden.
+            if "H10710" in commands and status.get("H10702") != "1":
+                status["H10706"] = str(commands["H10710"])
+            if "H10711" in commands and status.get("H10703") != "1":
+                status["H10707"] = str(commands["H10711"])
+            if "H01021" in commands:
+                status["H01006"] = str(commands["H01021"])
             # H10708 is the command register. Writing readback H10714 is ignored.
             if "H10708" in commands and accept_power[0]:
                 status["H10714"] = status["H10704"] = str(commands["H10708"])
@@ -70,7 +80,9 @@ def device(program=2, mode=4, requested=33, effective=21):
     async def refresh():
         data["status"] = atrea.getStatus(False)
 
-    data["coordinator"] = SimpleNamespace(async_request_refresh=refresh)
+    data["coordinator"] = SimpleNamespace(
+        async_request_refresh=refresh, async_refresh=refresh, last_update_success=True,
+    )
     hass = SimpleNamespace(
         data={"atrea": {"test": data}}, async_add_executor_job=executor,
     )
@@ -81,6 +93,7 @@ def device(program=2, mode=4, requested=33, effective=21):
     entity = AtreaDevice(hass, entry, "Atrea", "12,20,50,100", dict.fromkeys(ALL_PRESET_LIST, True))
     entity.hass = hass
     entity.async_schedule_update_ha_state = Mock()
+    entity.async_write_ha_state = Mock()
     return entity, status, writes, transport, accept_power
 
 
@@ -239,6 +252,206 @@ class PowerCommandTests(unittest.IsolatedAsyncioTestCase):
             await entity.async_set_hvac_mode(HVACMode.OFF)
         self.assertEqual(len(writes), 1)
         self.assertEqual(status["H10715"], "0")
+
+
+class TemperatureCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_weekly_change_overrides_only_temperature_and_discards_stale_commands(self):
+        entity, status, writes, transport, _ = device(program=1)
+        entity.atrea.commands.update({"H10708": "00038", "H10709": "00002"})
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_temperature(temperature=22.5)
+        self.assertEqual(writes, [{"H10702": 2, "H10710": 225}])
+        self.assertEqual(entity.target_temperature, 22.5)
+        self.assertEqual(status["H10706"], "225")
+        for register in ("H10700", "H10701", "H10703"):
+            self.assertEqual(status[register], "1")
+        self.assertEqual(status["H10714"], "33")
+        self.assertEqual(status["H10715"], "4")
+        self.assertEqual(entity.program, "Temporary")
+        self.assertFalse(entity.atrea.commands)
+        self.assertFalse(entity.updatePending)
+
+    async def test_manual_and_temporary_temperature_controls_stay_in_their_program(self):
+        for program in (0, 2):
+            with self.subTest(program=program):
+                entity, status, writes, transport, _ = device(program=program)
+                with patch("pyatrea.requests.get", side_effect=transport):
+                    await entity.async_set_temperature(temperature=22.5)
+                self.assertEqual(writes, [{"H10710": 225}])
+                self.assertEqual(entity.target_temperature, 22.5)
+                for register in ("H10700", "H10701", "H10702", "H10703"):
+                    self.assertEqual(status[register], str(program))
+
+    async def test_independently_scheduled_temperature_is_overridden_in_fan_only(self):
+        entity, status, writes, transport, _ = device(program=2)
+        status["H10702"] = entity.atrea.status["H10702"] = "1"
+        self.assertEqual(entity.hvac_mode, HVACMode.FAN_ONLY)
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_temperature(temperature=22.5)
+        self.assertEqual(writes, [{"H10702": 2, "H10710": 225}])
+        self.assertEqual(entity.target_temperature, 22.5)
+
+    async def test_temperature_network_failure_does_not_suspend_polling(self):
+        entity, _, _, _, _ = device(program=1)
+        with patch("pyatrea.requests.get", side_effect=ConnectionError("offline")):
+            with self.assertRaises(ConnectionError):
+                await entity.async_set_temperature(temperature=22.5)
+        self.assertFalse(entity.atrea.commands)
+        self.assertFalse(entity.updatePending)
+
+    async def test_auto_restores_weekly_control_after_a_temperature_only_override(self):
+        entity, status, writes, transport, _ = device(program=1)
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_temperature(temperature=22.5)
+            self.assertEqual(status["H10700"], "1")
+            self.assertEqual(status["H10702"], "2")
+            await entity.async_set_hvac_mode(HVACMode.AUTO)
+        self.assertEqual(writes[1], {f"H1070{i}": 1 for i in range(4)})
+        self.assertEqual(entity.program, "Schedule")
+        self.assertEqual(entity.hvac_mode, HVACMode.AUTO)
+        self.assertEqual(entity.target_temperature, 21.5)
+        for register in ("H10700", "H10701", "H10702", "H10703"):
+            self.assertEqual(status[register], "1")
+
+    async def test_legacy_temperature_write_does_not_require_rd5_control_registers(self):
+        entity, status, writes, transport, _ = device(program=0)
+        for state in (status, entity.atrea.status):
+            state.pop("H10702")
+            state.pop("H10706")
+            state["H01006"] = "215"
+        entity.atrea.params["ids"].remove("H10710")
+        entity.atrea.params["ids"].append("H01021")
+        entity.atrea.params["coefs"].update({"H01006": 10, "H01021": 10})
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_temperature(temperature=22.5)
+        self.assertEqual(writes, [{"H01021": 225}])
+        self.assertEqual(entity.target_temperature, 22.5)
+
+
+class ClimateRefreshTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auto_reads_schedule_target_even_when_debounced_refresh_is_pending(self):
+        entity, status, _, transport, _ = device(program=2)
+        status["H10706"] = entity.atrea.status["H10706"] = "225"
+        entity.manualUpdate(False)
+        self.assertEqual(entity.target_temperature, 22.5)
+        coordinator = entity._coordinator
+        coordinator.async_refresh = AsyncMock(side_effect=coordinator.async_refresh)
+        coordinator.async_request_refresh = AsyncMock()  # Queues a later read.
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_hvac_mode(HVACMode.AUTO)
+        coordinator.async_refresh.assert_awaited_once()
+        coordinator.async_request_refresh.assert_not_awaited()
+        self.assertEqual(entity.target_temperature, 21.5)
+        self.assertEqual(entity.hvac_mode, HVACMode.AUTO)
+        entity.async_write_ha_state.assert_called_once()
+        entity.async_schedule_update_ha_state.assert_not_called()
+
+    async def test_coordinator_updates_publish_climate_state_without_a_separate_poll(self):
+        entity, *_ = device()
+        unsubscribe = Mock()
+        entity._coordinator.async_add_listener = Mock(return_value=unsubscribe)
+        entity.async_on_remove = Mock()
+        await entity.async_added_to_hass()
+        listener = entity._coordinator.async_add_listener.call_args.args[0]
+        entity.data["status"]["H10706"] = "230"
+        listener()
+        self.assertEqual(entity.target_temperature, 23.0)
+        self.assertFalse(entity.should_poll)
+        entity.async_write_ha_state.assert_called_once()
+        entity.async_schedule_update_ha_state.assert_not_called()
+        entity.async_on_remove.assert_called_once_with(unsubscribe)
+
+    async def test_failed_post_command_read_does_not_report_cached_state_as_success(self):
+        entity, _, _, transport, _ = device()
+
+        async def failed_refresh():
+            entity._coordinator.last_update_success = False
+
+        entity._coordinator.async_refresh = failed_refresh
+        with patch("pyatrea.requests.get", side_effect=transport):
+            with self.assertRaisesRegex(HomeAssistantError, "Unable to read Atrea state"):
+                await entity.async_set_temperature(temperature=22.5)
+        self.assertFalse(entity.updatePending)
+        self.assertFalse(entity.atrea.commands)
+        entity.async_write_ha_state.assert_not_called()
+
+
+class SettingProgramTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zone_changes_temporarily_override_only_weekly_zone_control(self):
+        for program in (0, 1, 2):
+            with self.subTest(program=program):
+                entity, status, writes, transport, _ = device(program=program)
+                entity.atrea.commands["H10709"] = "00002"
+                with patch("pyatrea.requests.get", side_effect=transport):
+                    await entity.async_set_swing_mode(entity.swing_modes[0])
+                expected = {"H10711": 0}
+                if program == 1:
+                    expected["H10703"] = 2
+                self.assertEqual(writes, [expected])
+                self.assertEqual(entity.swing_mode, entity.swing_modes[0])
+                self.assertEqual(status["H10707"], "0")
+                for register in ("H10700", "H10701", "H10702"):
+                    self.assertEqual(status[register], str(program))
+                self.assertEqual(entity.program, "Manual" if program == 0 else "Temporary")
+                self.assertFalse(entity.atrea.commands)
+                self.assertFalse(entity.updatePending)
+
+    async def test_explicit_fan_only_after_zone_override_selects_manual_control(self):
+        for program in (0, 1):
+            with self.subTest(power_control=program):
+                entity, status, _, transport, _ = device(program=program)
+                status["H10703"] = entity.atrea.status["H10703"] = "1"
+                with patch("pyatrea.requests.get", side_effect=transport):
+                    await entity.async_set_swing_mode(entity.swing_modes[0])
+                    self.assertEqual(entity.program, "Temporary")
+                    self.assertEqual(entity.hvac_mode, HVACMode.FAN_ONLY)
+                    await entity.async_set_hvac_mode(HVACMode.FAN_ONLY)
+                self.assertEqual(entity.program, "Manual")
+                for register in ("H10700", "H10701", "H10702", "H10703"):
+                    self.assertEqual(status[register], "0")
+                self.assertEqual(entity.hvac_mode, HVACMode.FAN_ONLY)
+
+    async def test_rd5_percentage_power_overrides_only_power(self):
+        entity, status, writes, transport, _ = device(program=1)
+        status["H10510"] = entity.atrea.status["H10510"] = "0"
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_fan_mode("25%")
+        self.assertEqual(writes, [{"H10700": 2, "H10708": 25}])
+        for register in ("H10701", "H10702", "H10703"):
+            self.assertEqual(status[register], "1")
+        self.assertEqual(entity.program, "Temporary")
+
+    async def test_rd5_preset_with_percentage_power_overrides_only_mode(self):
+        entity, status, writes, transport, _ = device(program=1)
+        status["H10510"] = entity.atrea.status["H10510"] = "0"
+        with patch("pyatrea.requests.get", side_effect=transport):
+            await entity.async_set_preset_mode("Ventilation")
+        self.assertEqual(writes, [{"H10701": 2, "H10709": 2}])
+        for register in ("H10700", "H10702", "H10703"):
+            self.assertEqual(status[register], "1")
+
+    async def test_turn_on_and_off_override_only_weekly_operating_mode(self):
+        for turn_on in (False, True):
+            with self.subTest(turn_on=turn_on):
+                entity, status, writes, transport, _ = device(
+                    program=1, mode=0 if turn_on else 2, requested=11, effective=11,
+                )
+                with patch("pyatrea.requests.get", side_effect=transport):
+                    if turn_on:
+                        await entity.async_turn_on()
+                    else:
+                        await entity.async_turn_off()
+                self.assertEqual(writes, [{"H10701": 2, "H10709": 2 if turn_on else 0}])
+                for register in ("H10700", "H10702", "H10703"):
+                    self.assertEqual(status[register], "1")
+
+    async def test_zone_network_failure_clears_commands_and_resumes_polling(self):
+        entity, _, _, _, _ = device(program=1)
+        with patch("pyatrea.requests.get", side_effect=ConnectionError("offline")):
+            with self.assertRaises(ConnectionError):
+                await entity.async_set_swing_mode(entity.swing_modes[0])
+        self.assertFalse(entity.atrea.commands)
+        self.assertFalse(entity.updatePending)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import time
 import re
 import json
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import slugify
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACAction
@@ -164,7 +164,16 @@ class AtreaDevice(ClimateEntity):
             self.async_schedule_update_ha_state(True)
 
     async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
         self._enabled = True
+        self.async_on_remove(
+            self._coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    @callback
+    def _handle_coordinator_update(self):
+        """Publish every completed coordinator read without another device poll."""
+        self.manualUpdate()
 
     async def async_will_remove_from_hass(self) -> None:
         self._enabled = False
@@ -196,7 +205,7 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def should_poll(self):
-        return True
+        return False
 
     @property
     def unit_of_measurement(self):
@@ -407,8 +416,9 @@ class AtreaDevice(ClimateEntity):
         try:
             if not await self.hass.async_add_executor_job(self.atrea.exec):
                 raise HomeAssistantError("The Atrea unit did not accept the control command.")
-            await self._coordinator.async_request_refresh()
-            if not self.data.get("status"):
+            # Await a fresh read instead of returning while a debounced read is pending.
+            await self._coordinator.async_refresh()
+            if not self._coordinator.last_update_success or not self.data.get("status"):
                 raise HomeAssistantError("Unable to read Atrea state after the control command.")
             self.manualUpdate()
             reported = self._power_code(self.data.get("status") or {}, "H10714")
@@ -606,7 +616,7 @@ class AtreaDevice(ClimateEntity):
         else:
             self._current_hvac_mode = None
         if updateState:
-            self.async_schedule_update_ha_state(True)
+            self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode):
         preset_power = self._uses_preset_power()
@@ -629,10 +639,9 @@ class AtreaDevice(ClimateEntity):
                 return
             fan_percent = min(100, max(12, fan_percent))
             self.atrea.commands.clear()
-            if (
-                await self.hass.async_add_executor_job(self.atrea.getProgram)
-                == AtreaProgram.WEEKLY
-            ):
+            if "H10700" in (self.data.get("status") or {}):
+                self._queue_temporary_override("H10700")
+            elif await self.hass.async_add_executor_job(self.atrea.getProgram) == AtreaProgram.WEEKLY:
                 self.atrea.setProgram(AtreaProgram.TEMPORARY)
             self.atrea.setPower(fan_percent)
 
@@ -640,35 +649,29 @@ class AtreaDevice(ClimateEntity):
 
     async def async_turn_on(self):
         self.atrea.commands.clear()
-        if self.air_handling_control == "Manual":
+        if "H10701" in (self.data.get("status") or {}):
+            self._queue_temporary_override("H10701")
+        elif self.air_handling_control == "Manual":
             self.atrea.setProgram(AtreaProgram.MANUAL)
-            self._current_hvac_mode = HVACMode.FAN_ONLY
         elif self.air_handling_control == "Schedule":
             self.atrea.setProgram(AtreaProgram.WEEKLY)
-            self._current_hvac_mode = HVACMode.AUTO
         elif self.air_handling_control == "Temporary":
             self.atrea.setProgram(AtreaProgram.TEMPORARY)
-            self._current_hvac_mode = HVACMode.FAN_ONLY
-        if self._uses_preset_power():
-            self._queue_temporary_override("H10701")
         self.atrea.setMode(AtreaMode.VENTILATION)
         expected_power = self._queue_matching_power(AtreaMode.VENTILATION)
         await self._async_execute_control(expected_power)
 
     async def async_turn_off(self):
         self.atrea.commands.clear()
-        if self.air_handling_control == "Manual":
+        if "H10701" in (self.data.get("status") or {}):
+            self._queue_temporary_override("H10701")
+        elif self.air_handling_control == "Manual":
             self.atrea.setProgram(AtreaProgram.MANUAL)
         elif self.air_handling_control == "Temporary":
             self.atrea.setProgram(AtreaProgram.TEMPORARY)
         else:
             self.atrea.setProgram(AtreaProgram.WEEKLY)
-
-        self._current_hvac_mode = HVACMode.OFF
-        if self._uses_preset_power():
-            self._queue_temporary_override("H10701")
         self.atrea.setMode(AtreaMode.OFF)
-
         await self._async_execute_control()
 
     async def async_set_hvac_mode(self, hvac_mode):
@@ -687,8 +690,13 @@ class AtreaDevice(ClimateEntity):
 
         self.atrea.commands.clear()
 
-        if program != None and program != await self.hass.async_add_executor_job(
-            self.atrea.getProgram
+        if program is not None and (
+            program != await self.hass.async_add_executor_job(self.atrea.getProgram)
+            or any(
+                self._power_code(self.data.get("status") or {}, f"H1070{i}")
+                not in (None, int(program))
+                for i in range(4)
+            )
         ):
             self.atrea.setProgram(program)
 
@@ -714,7 +722,7 @@ class AtreaDevice(ClimateEntity):
             raise ServiceValidationError(f"Preset {preset_mode!r} is not available.")
 
         self.atrea.commands.clear()
-        if self._uses_preset_power():
+        if "H10701" in (self.data.get("status") or {}):
             self._queue_temporary_override("H10701")
         elif await self.hass.async_add_executor_job(self.atrea.getProgram) == AtreaProgram.WEEKLY:
             self.atrea.setProgram(AtreaProgram.TEMPORARY)
@@ -726,49 +734,30 @@ class AtreaDevice(ClimateEntity):
             await self._async_execute_control(expected_power)
 
     async def async_set_temperature(self, **kwargs):
-        """Set new target temperature."""
+        """Set target temperature, temporarily overriding its weekly schedule."""
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
-        elif temperature >= 10 and temperature <= 40:
-            self.atrea.setTemperature(temperature)
-            self.updatePending = True
-            await self.hass.async_add_executor_job(self.atrea.exec)
-            await self._coordinator.async_request_refresh()
-            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-            self.manualUpdate()
-            self.updatePending = False
-        else:
-            LOGGER.warn(
+        if not 10 <= temperature <= 40:
+            LOGGER.warning(
                 "Chosen temperature=%s is incorrect. It needs to be between 10 and 40.",
                 str(temperature),
             )
+            return
+
+        self.atrea.commands.clear()
+        self._queue_temporary_override("H10702")
+        self.atrea.setTemperature(temperature)
+        await self._async_execute_control()
 
     async def async_set_swing_mode(self, swing_mode):
-        """Set new target swing operation."""
-        LOGGER.debug("Setting swing mode to %s", str(swing_mode))
+        """Set the zone, temporarily overriding only scheduled zone control."""
         if not self._is_swing_mode_enabled() or swing_mode not in self._swing_labels:
-            LOGGER.warn(
-                "Zone setting (%s) is not supported.", str(swing_mode))
+            LOGGER.warning("Zone setting (%s) is not supported.", str(swing_mode))
             return
         zone = self._swing_labels.index(swing_mode)
-        LOGGER.debug("Setting zone to %s", zone)
-        self.updatePending = True
-        try:
-            # Transition H10703 from 1 to 2 before applying the zone.
-            if self.atrea.getValue("H10703") == 1:
-                self.atrea.setCommand("H10703", 2)
-            self.atrea.setCommand("H10711", zone)
-
-            result = await self.hass.async_add_executor_job(self.atrea.exec)
-            if result is not False:
-                LOGGER.error("Error setting zone to %s", zone)
-
-            await self._coordinator.async_request_refresh()
-            await self.hass.async_add_executor_job(
-                time.sleep, UPDATE_DELAY / 1000
-            )
-            self.manualUpdate()
-        finally:
-            self.updatePending = False
+        self.atrea.commands.clear()
+        self._queue_temporary_override("H10703")
+        self.atrea.setCommand("H10711", zone)
+        await self._async_execute_control()
 
