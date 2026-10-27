@@ -27,6 +27,12 @@ from .utils import convert_co2_voltage, convert_temperature
 
 VOLT = "V"
 VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR = "m³/h"
+CONSTANT_FLOW_TYPES = {"1", "4"}
+
+
+def is_constant_flow_unit(status: dict) -> bool:
+    """Return whether the unit reports a constant-flow operating type."""
+    return str(status.get("H10510")) in CONSTANT_FLOW_TYPES
 
 
 def convert_millivolts_to_volts(value) -> float:
@@ -281,10 +287,6 @@ async def async_setup_entry(
             if (
                 register not in status
                 or sensor_key in known_sensor_keys
-                or (
-                    description.get("constant_flow_only")
-                    and str(status.get("H10510")) != "1"
-                )
             ):
                 continue
             known_sensor_keys.add(sensor_key)
@@ -355,7 +357,7 @@ class AtreaRegisterSensor(CoordinatorEntity, SensorEntity):
             return False
         return (
             not self._constant_flow_only
-            or str((self._data.get("status") or {}).get("H10510")) == "1"
+            or is_constant_flow_unit(self._data.get("status") or {})
         )
 
     @property
